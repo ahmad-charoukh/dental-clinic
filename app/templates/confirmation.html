@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block body %}<main class="center"><div class="confirm card"><div class="check">✓</div><h1>تم استلام طلب الموعد</h1><p>رقم الطلب #{{a.id}}</p><p><b>{{a.service.title_ar}}</b><br>{{a.starts_at.strftime('%Y-%m-%d %H:%M')}}</p><p>الحالة الحالية: {{a.status}}</p><a class="btn" href="/?lang={{l}}">العودة للرئيسية</a></div></main>{% endblock %}

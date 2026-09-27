@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="{{l or 'ar'}}" dir="{{t.dir if t else 'rtl'}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f7fbff">
+  <meta name="description" content="Dr. Wael Al-Bash Dental Platform">
+  <meta property="og:title" content="Dr. Wael Al-Bash">
+  <meta property="og:type" content="website">
+  <title>{% block title %}Dr. Wael Al-Bash{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Alexandria:wght@400;500;600;700;800&family=Tajawal:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  {% block head %}{% endblock %}
+</head>
+<body>{% block body %}{% endblock %}{% block scripts %}{% endblock %}</body>
+</html>
