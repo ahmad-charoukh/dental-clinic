@@ -1,0 +1,31 @@
+{
+  "name": "dr.wael",
+  "version": "1.0.0",
+  "description": "Production-oriented dental platform for Dr. Wael Al-Bash: multilingual public site (AR/TR/EN), booking with DB-level double-booking protection, patient files, clinical cases, CMS settings, media library, audit log, and Arabic RTL dashboard.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ahmad-charoukh/dental-clinic.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ahmad-charoukh/dental-clinic/issues"
+  },
+  "homepage": "https://github.com/ahmad-charoukh/dental-clinic#readme",
+  "dependencies": {
+    "@netlify/database": "^2.0.1",
+    "@netlify/functions": "^6.0.0",
+    "express": "^5.2.1",
+    "nunjucks": "^3.2.4",
+    "serverless-http": "^4.0.0"
+  }
+}

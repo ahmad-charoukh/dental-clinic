@@ -1,6 +1,10 @@
-__pycache__/
-*.pyc
+.env
 .venv/
 venv/
-.env
+__pycache__/
+*.pyc
+node_modules/
+.netlify/
 data/test.db
+data/wael_export.db
+dr-wael-netlify.zip
