@@ -1,8 +1,9 @@
-[build]
+﻿[build]
   command = "npm run build"
   publish = "public"
 
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
+  external_node_modules = ["@netlify/blobs", "@netlify/database", "nunjucks"]
   included_files = ["app/templates/**"]

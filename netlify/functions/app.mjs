@@ -1,5 +1,5 @@
-import { getDatabase } from "@netlify/database";
-import { getStore } from "@netlify/blobs";
+﻿import { getDatabase } from "@netlify/database";
+
 import nunjucks from "nunjucks";
 import { createHmac, randomBytes, scryptSync, timingSafeEqual, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
@@ -20,8 +20,8 @@ const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp", "applicat
 const BLOCKING_STATUSES = new Set(["pending", "confirmed", "rescheduled", "completed", "no_show"]);
 
 const I18N = {
-  ar: {dir:"rtl",home:"الرئيسية",about:"عن الطبيب",services:"الخدمات",cases:"الحالات",reviews:"آراء المرضى",articles:"المقالات",faq:"الأسئلة الشائعة",contact:"تواصل معنا",book:"احجز موعد",whatsapp:"تواصل عبر واتساب",hero:"ابتسامة صحية .. لحياة أجمل",sub:"رعاية أسنان حديثة ومريحة مبنية على الجودة والثقة.",choose:"اختر الخدمة",date:"اختر التاريخ",time:"الوقت المتاح",name:"الاسم الكامل",phone:"الهاتف",email:"البريد الإلكتروني",notes:"ملاحظات",submit:"إرسال طلب الحجز"},
-  tr: {dir:"ltr",home:"Ana Sayfa",about:"Hakkında",services:"Hizmetler",cases:"Vakalar",reviews:"Yorumlar",articles:"Makaleler",faq:"SSS",contact:"İletişim",book:"Randevu Al",whatsapp:"WhatsApp",hero:"Sağlıklı gülüş, daha güzel bir hayat",sub:"Kalite ve güven odaklı modern, konforlu diş hekimliği.",choose:"Hizmet seçin",date:"Tarih seçin",time:"Uygun saat",name:"Ad Soyad",phone:"Telefon",email:"E-posta",notes:"Notlar",submit:"Randevu isteği gönder"},
+  ar: {dir:"rtl",home:"ط§ظ„ط±ط¦ظٹط³ظٹط©",about:"ط¹ظ† ط§ظ„ط·ط¨ظٹط¨",services:"ط§ظ„ط®ط¯ظ…ط§طھ",cases:"ط§ظ„ط­ط§ظ„ط§طھ",reviews:"ط¢ط±ط§ط، ط§ظ„ظ…ط±ط¶ظ‰",articles:"ط§ظ„ظ…ظ‚ط§ظ„ط§طھ",faq:"ط§ظ„ط£ط³ط¦ظ„ط© ط§ظ„ط´ط§ط¦ط¹ط©",contact:"طھظˆط§طµظ„ ظ…ط¹ظ†ط§",book:"ط§ط­ط¬ط² ظ…ظˆط¹ط¯",whatsapp:"طھظˆط§طµظ„ ط¹ط¨ط± ظˆط§طھط³ط§ط¨",hero:"ط§ط¨طھط³ط§ظ…ط© طµط­ظٹط© .. ظ„ط­ظٹط§ط© ط£ط¬ظ…ظ„",sub:"ط±ط¹ط§ظٹط© ط£ط³ظ†ط§ظ† ط­ط¯ظٹط«ط© ظˆظ…ط±ظٹط­ط© ظ…ط¨ظ†ظٹط© ط¹ظ„ظ‰ ط§ظ„ط¬ظˆط¯ط© ظˆط§ظ„ط«ظ‚ط©.",choose:"ط§ط®طھط± ط§ظ„ط®ط¯ظ…ط©",date:"ط§ط®طھط± ط§ظ„طھط§ط±ظٹط®",time:"ط§ظ„ظˆظ‚طھ ط§ظ„ظ…طھط§ط­",name:"ط§ظ„ط§ط³ظ… ط§ظ„ظƒط§ظ…ظ„",phone:"ط§ظ„ظ‡ط§طھظپ",email:"ط§ظ„ط¨ط±ظٹط¯ ط§ظ„ط¥ظ„ظƒطھط±ظˆظ†ظٹ",notes:"ظ…ظ„ط§ط­ط¸ط§طھ",submit:"ط¥ط±ط³ط§ظ„ ط·ظ„ط¨ ط§ظ„ط­ط¬ط²"},
+  tr: {dir:"ltr",home:"Ana Sayfa",about:"Hakkؤ±nda",services:"Hizmetler",cases:"Vakalar",reviews:"Yorumlar",articles:"Makaleler",faq:"SSS",contact:"ؤ°letiإںim",book:"Randevu Al",whatsapp:"WhatsApp",hero:"Saؤںlؤ±klؤ± gأ¼lأ¼إں, daha gأ¼zel bir hayat",sub:"Kalite ve gأ¼ven odaklؤ± modern, konforlu diإں hekimliؤںi.",choose:"Hizmet seأ§in",date:"Tarih seأ§in",time:"Uygun saat",name:"Ad Soyad",phone:"Telefon",email:"E-posta",notes:"Notlar",submit:"Randevu isteؤںi gأ¶nder"},
   en: {dir:"ltr",home:"Home",about:"About",services:"Services",cases:"Cases",reviews:"Reviews",articles:"Articles",faq:"FAQ",contact:"Contact",book:"Book Appointment",whatsapp:"WhatsApp",hero:"A healthy smile for a better life",sub:"Modern, comfortable dentistry built around quality and trust.",choose:"Choose service",date:"Choose date",time:"Available time",name:"Full name",phone:"Phone",email:"Email",notes:"Notes",submit:"Send booking request"}
 };
 
@@ -184,7 +184,7 @@ async function sendEmail(to, subject, htmlBody) {
   }catch(e){ await db.pool.query("INSERT INTO email_logs(recipient,subject,status,provider_id,error,created_at) VALUES($1,$2,'failed','',$3,NOW())",[to,subject,String(e).slice(0,500)]); }
 }
 function emailText(locale,status,appt){
-  const dicts={ar:{pending:"تم استلام طلب موعدك",confirmed:"تم تأكيد موعدك",rejected:"تعذر قبول الموعد",cancelled:"تم إلغاء الموعد",rescheduled:"تم تعديل موعدك"},tr:{pending:"Randevu talebiniz alındı",confirmed:"Randevunuz onaylandı",rejected:"Randevu talebi kabul edilemedi",cancelled:"Randevunuz iptal edildi",rescheduled:"Randevunuz güncellendi"},en:{pending:"Booking request received",confirmed:"Appointment confirmed",rejected:"Appointment request declined",cancelled:"Appointment cancelled",rescheduled:"Appointment rescheduled"}};
+  const dicts={ar:{pending:"طھظ… ط§ط³طھظ„ط§ظ… ط·ظ„ط¨ ظ…ظˆط¹ط¯ظƒ",confirmed:"طھظ… طھط£ظƒظٹط¯ ظ…ظˆط¹ط¯ظƒ",rejected:"طھط¹ط°ط± ظ‚ط¨ظˆظ„ ط§ظ„ظ…ظˆط¹ط¯",cancelled:"طھظ… ط¥ظ„ط؛ط§ط، ط§ظ„ظ…ظˆط¹ط¯",rescheduled:"طھظ… طھط¹ط¯ظٹظ„ ظ…ظˆط¹ط¯ظƒ"},tr:{pending:"Randevu talebiniz alؤ±ndؤ±",confirmed:"Randevunuz onaylandؤ±",rejected:"Randevu talebi kabul edilemedi",cancelled:"Randevunuz iptal edildi",rescheduled:"Randevunuz gأ¼ncellendi"},en:{pending:"Booking request received",confirmed:"Appointment confirmed",rejected:"Appointment request declined",cancelled:"Appointment cancelled",rescheduled:"Appointment rescheduled"}};
   const l=dicts[locale]?locale:"ar", subj=dicts[l][status]||"Appointment update";
   const body=`<h2>${subj}</h2><p>${formatDate(appt.starts_at)}</p><p>${appt.service_title_en||""}</p><p><a href="${BASE_URL}/booking?lang=${l}">Book another appointment</a></p>`;
   return [subj,body];
@@ -211,7 +211,7 @@ async function handle(req) {
       query("SELECT * FROM reviews WHERE published=TRUE ORDER BY id DESC LIMIT 6"),
       query("SELECT * FROM faq WHERE published=TRUE ORDER BY sort_order,id"),settingsDict()
     ]);
-    for(const r of reviews) r.stars="★".repeat(Math.max(0,Math.min(5,Number(r.rating||0))));
+    for(const r of reviews) r.stars="âک…".repeat(Math.max(0,Math.min(5,Number(r.rating||0))));
     const body=render("home.html",{l,t:I18N[l],services:services.map(x=>serviceView(x,l)),cases,settings,articles:arts,reviews,faqs});
     return html(body,200,{"Set-Cookie":cookie("lang",l,{maxAge:31536000,sameSite:"Lax"})});
   }
@@ -258,7 +258,7 @@ async function handle(req) {
 
   if(method==="POST" && path==="/contact"){
     const f=await req.formData(), name=String(f.get("name")||"").trim(), email=String(f.get("email")||"").trim(), phone=String(f.get("phone")||"").trim(), body=String(f.get("body")||"").trim();
-    if(body.length<5) return html(render("error.html",{code:422,message:"تحقق من الرسالة"}),422);
+    if(body.length<5) return html(render("error.html",{code:422,message:"طھط­ظ‚ظ‚ ظ…ظ† ط§ظ„ط±ط³ط§ظ„ط©"}),422);
     await db.pool.query("INSERT INTO messages(name,email,phone,body,created_at) VALUES($1,$2,$3,$4,NOW())",[name,email,phone,body]); return redirect("/?sent=1");
   }
 
@@ -266,7 +266,7 @@ async function handle(req) {
   if(method==="POST" && path==="/admin/login"){
     const f=await req.formData(), email=String(f.get("email")||"").toLowerCase().trim(), password=String(f.get("password")||"");
     const u=await one("SELECT * FROM users WHERE email=$1",[email]);
-    if(!u || !verifyPassword(password,u.password_hash)) return html(render("login.html",{error:"بيانات الدخول غير صحيحة",l:"ar",t:I18N.ar}),401);
+    if(!u || !verifyPassword(password,u.password_hash)) return html(render("login.html",{error:"ط¨ظٹط§ظ†ط§طھ ط§ظ„ط¯ط®ظˆظ„ ط؛ظٹط± طµط­ظٹط­ط©",l:"ar",t:I18N.ar}),401);
     const tok=signSession(u.id); return redirect("/admin",303,{"Set-Cookie":cookie("wael_session",tok,{maxAge:43200,httpOnly:true,sameSite:"Strict",secure:true})});
   }
   if(method==="POST" && path==="/admin/logout") return redirect("/admin/login",303,{"Set-Cookie":cookie("wael_session","",{httpOnly:true,sameSite:"Strict",secure:true,expires:new Date(0)})});
@@ -315,7 +315,7 @@ async function handle(req) {
     if(method==="POST" && path==="/admin/media"){
       const f=await req.formData(), category=String(f.get("category")||"General").slice(0,80), file=f.get("file");
       if(!file || typeof file.arrayBuffer !== "function") return json({detail:"file required"},422); if(!ALLOWED_MIME.has(file.type)) return json({detail:"unsupported file"},415); if(file.size>MAX_UPLOAD)return json({detail:"file too large"},413);
-      const ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","application/pdf":"pdf","video/mp4":"mp4"}[file.type], key=`${randomUUID()}.${ext}`; const store=getStore("media-uploads"); await store.set(key,file,{metadata:{mime:file.type,filename:file.name||key}});
+      const ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","application/pdf":"pdf","video/mp4":"mp4"}[file.type], key=`${randomUUID()}.${ext}`; const { getStore } = await import("@netlify/blobs"); const store=getStore("media-uploads"); await store.set(key,file,{metadata:{mime:file.type,filename:file.name||key}});
       const p=`/media/${key}`; const row=await one("INSERT INTO media(filename,path,mime,category,created_at) VALUES($1,$2,$3,$4,NOW()) RETURNING id",[(file.name||key).slice(0,255),p,file.type,category]); await audit("media.uploaded","media",row.id,file.name||key,u.email); return redirect("/admin#media");
     }
 
@@ -352,13 +352,13 @@ async function handle(req) {
   return render404(req,url);
 }
 
-function render404(req,url){ const l=lang(req,url); return html(render("error.html",{code:404,message:"الصفحة غير موجودة",l,t:I18N[l]}),404); }
+function render404(req,url){ const l=lang(req,url); return html(render("error.html",{code:404,message:"ط§ظ„طµظپط­ط© ط؛ظٹط± ظ…ظˆط¬ظˆط¯ط©",l,t:I18N[l]}),404); }
 
 export default async (req) => {
   try { return await handle(req); }
   catch (e) {
     console.error(e);
-    try { return html(render("error.html",{code:500,message:"حدث خطأ غير متوقع",l:"ar",t:I18N.ar}),500); }
+    try { return html(render("error.html",{code:500,message:"ط­ط¯ط« ط®ط·ط£ ط؛ظٹط± ظ…طھظˆظ‚ط¹",l:"ar",t:I18N.ar}),500); }
     catch { return new Response("Internal Server Error",{status:500}); }
   }
 };
@@ -367,3 +367,4 @@ export const config = {
   path: ["/", "/*"],
   preferStatic: true
 };
+
