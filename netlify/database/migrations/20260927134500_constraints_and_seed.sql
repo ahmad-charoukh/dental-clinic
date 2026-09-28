@@ -6,11 +6,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS blocked_dates_day_uq ON blocked_dates (day);
 CREATE INDEX IF NOT EXISTS appointments_starts_at_idx ON appointments (starts_at);
 CREATE INDEX IF NOT EXISTS appointments_patient_id_idx ON appointments (patient_id);
 CREATE INDEX IF NOT EXISTS appointments_service_id_idx ON appointments (service_id);
-
--- Seed users from the existing wael.db
-INSERT INTO users (id, email, password_hash, role, active, created_at) VALUES (1, 'admin@waelbash.local', 'scrypt$f7c8bf6d566cc07aa9c8fa12e87ad7ea$31cbe32ae698c532325eb39cfc6cbf127f1b295517c2eae4a814a0fbbe9f10fe', 'admin', TRUE, '2026-09-26 04:40:34.857445') ON CONFLICT DO NOTHING;
-SELECT setval(pg_get_serial_sequence('users', 'id'), COALESCE((SELECT MAX(id) FROM users), 1), true);
-
 -- Seed services from the existing wael.db
 INSERT INTO services (id, slug, title_ar, title_tr, title_en, description_ar, description_tr, description_en, image, duration, sessions, price, sort_order, active) VALUES (1, 'root-canal', 'حشو العصب', 'Kanal Tedavisi', 'Root Canal', 'علاج جذور الأسنان بعناية دقيقة.', 'Kök kanal tedavisi.', 'Precise root canal treatment.', '', 30, 1, NULL, 4, TRUE) ON CONFLICT DO NOTHING;
 INSERT INTO services (id, slug, title_ar, title_tr, title_en, description_ar, description_tr, description_en, image, duration, sessions, price, sort_order, active) VALUES (2, 'cleaning', 'تنظيف الأسنان', 'Diş Taşı Temizliği', 'Dental Cleaning', 'إزالة الجير والتصبغات.', 'Diş taşı ve lekelerin temizliği.', 'Plaque and stain removal.', '', 30, 1, NULL, 1, TRUE) ON CONFLICT DO NOTHING;
@@ -19,15 +14,6 @@ INSERT INTO services (id, slug, title_ar, title_tr, title_en, description_ar, de
 INSERT INTO services (id, slug, title_ar, title_tr, title_en, description_ar, description_tr, description_en, image, duration, sessions, price, sort_order, active) VALUES (5, 'pediatric', 'طب أسنان الأطفال', 'Çocuk Diş Hekimliği', 'Pediatric Dentistry', 'رعاية مريحة للأطفال.', 'Çocuklara uygun diş bakımı.', 'Gentle dental care for children.', '', 30, 1, NULL, 5, TRUE) ON CONFLICT DO NOTHING;
 INSERT INTO services (id, slug, title_ar, title_tr, title_en, description_ar, description_tr, description_en, image, duration, sessions, price, sort_order, active) VALUES (6, 'orthodontics', 'تقويم الأسنان', 'Ortodonti', 'Orthodontics', 'تحسين اصطفاف الأسنان والعضة.', 'Diş dizilimi ve kapanış düzenleme.', 'Alignment and bite improvement.', '', 30, 1, NULL, 2, TRUE) ON CONFLICT DO NOTHING;
 SELECT setval(pg_get_serial_sequence('services', 'id'), COALESCE((SELECT MAX(id) FROM services), 1), true);
-
--- Seed patients from the existing wael.db
-INSERT INTO patients (id, name, phone, email, created_at) VALUES (1, 'MAHMUD AZİZ', '+905392298079', 'charoukhahmad@gmail.com', '2026-09-26 19:31:35.031719');
-SELECT setval(pg_get_serial_sequence('patients', 'id'), COALESCE((SELECT MAX(id) FROM patients), 1), true);
-
--- Seed appointments from the existing wael.db
-INSERT INTO appointments (id, patient_id, service_id, starts_at, slot_key, status, notes, locale, created_at) VALUES (1, 1, 4, '2026-10-02 16:30:00.000000', '202610021630', 'confirmed', '', 'ar', '2026-09-26 19:31:35.058734');
-SELECT setval(pg_get_serial_sequence('appointments', 'id'), COALESCE((SELECT MAX(id) FROM appointments), 1), true);
-
 -- Seed working_hours from the existing wael.db
 INSERT INTO working_hours (id, weekday, enabled, start_time, end_time, break_start, break_end) VALUES (1, 0, TRUE, '09:00:00.000000', '17:00:00.000000', '13:00:00.000000', '14:00:00.000000') ON CONFLICT DO NOTHING;
 INSERT INTO working_hours (id, weekday, enabled, start_time, end_time, break_start, break_end) VALUES (2, 1, TRUE, '09:00:00.000000', '17:00:00.000000', '13:00:00.000000', '14:00:00.000000') ON CONFLICT DO NOTHING;
@@ -66,14 +52,3 @@ INSERT INTO site_settings ("key", value) VALUES ('video_subtitle_tr', 'Tedavi ya
 INSERT INTO site_settings ("key", value) VALUES ('video_subtitle_en', 'A short introduction to the care approach and patient experience.') ON CONFLICT DO NOTHING;
 INSERT INTO site_settings ("key", value) VALUES ('video_url', '') ON CONFLICT DO NOTHING;
 INSERT INTO site_settings ("key", value) VALUES ('video_poster', '/static/uploads/doctor/wael-doctor-cutout-v6.png') ON CONFLICT DO NOTHING;
-
--- Seed email_logs from the existing wael.db
-INSERT INTO email_logs (id, recipient, subject, status, provider_id, error, created_at) VALUES (1, 'charoukhahmad@gmail.com', 'تم استلام طلب موعدك', 'configuration_required', '', 'RESEND_API_KEY missing', '2026-09-26 19:31:35.067122');
-INSERT INTO email_logs (id, recipient, subject, status, provider_id, error, created_at) VALUES (2, 'charoukhahmad@gmail.com', 'تم تأكيد موعدك', 'configuration_required', '', 'RESEND_API_KEY missing', '2026-09-27 11:20:51.222374');
-SELECT setval(pg_get_serial_sequence('email_logs', 'id'), COALESCE((SELECT MAX(id) FROM email_logs), 1), true);
-
--- Seed audit_logs from the existing wael.db
-INSERT INTO audit_logs (id, actor, action, entity, entity_id, detail, created_at) VALUES (1, 'public', 'appointment.created', 'appointment', '1', '2026-10-02T16:30:00 implants', '2026-09-26 19:31:35.061244');
-INSERT INTO audit_logs (id, actor, action, entity, entity_id, detail, created_at) VALUES (2, 'admin@waelbash.local', 'appointment.status_changed', 'appointment', '1', 'pending 2026-10-02T16:30:00 -> confirmed 2026-10-02T16:30:00', '2026-09-27 11:20:51.193867');
-SELECT setval(pg_get_serial_sequence('audit_logs', 'id'), COALESCE((SELECT MAX(id) FROM audit_logs), 1), true);
-
