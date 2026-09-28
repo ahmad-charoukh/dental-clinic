@@ -8,8 +8,8 @@
 ## 2) متغيرات Netlify المطلوبة
 من Netlify: Project configuration > Environment variables أضف:
 
-- `APP_SECRET`: قيمة عشوائية طويلة جدًا
-- `BASE_URL`: `https://sensational-eclair-af5ce5.netlify.app`
+- `APP_SECRET`: قيمة عشوائية بطول 32 حرفًا على الأقل
+- `BASE_URL`: رابط الموقع الفعلي؛ يمكن تركه ليستخدم `URL` الذي يوفره Netlify
 - `ADMIN_EMAIL`: بريد دخول لوحة التحكم
 - `ADMIN_PASSWORD`: كلمة مرور قوية (تُستخدم فقط إذا كانت قاعدة البيانات بلا مستخدم)
 - `RESEND_API_KEY`: اختياري لإرسال البريد
@@ -36,5 +36,8 @@ Netlify سيعمل Deploy تلقائيًا من GitHub، وسيطبق migrations
 
 ## ملاحظات
 - الصور والملفات الجديدة من لوحة التحكم تُحفظ في Netlify Blobs بدل نظام الملفات المؤقت.
+- ملفات المرضى في مخزن `patient-files` خاص، والتنزيل يتطلب تسجيل الدخول. مكتبة الموقع في `media-uploads`.
+- لا توجد بيانات دخول افتراضية لوظيفة Netlify؛ المتغيرات الثلاثة مطلوبة. قاعدة موجودة تحتفظ بالمستخدمين وكلمات مرورهم المشفرة.
+- المايغريشن `20260928190000_patient_records.sql` يضيف حقول الخطط العلاجية وملفات المرضى دون حذف البيانات السابقة.
 - ملفات CSS/JS/الصور الحالية تُنسخ إلى `public/static` أثناء build.
 - FastAPI الأصلي بقي في `app/main.py` كمرجع محلي، لكنه ليس runtime الخاص بـNetlify.

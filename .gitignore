@@ -1,4 +1,5 @@
 .env
+.env.*
 .venv/
 venv/
 __pycache__/
@@ -12,3 +13,5 @@ dr-wael-netlify.zip
 wael.db
 data/wael.db
 app/static/uploads/media/
+public/static/uploads/media/
+data/patient_files/
