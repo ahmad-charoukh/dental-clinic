@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block head %}<link rel="stylesheet" href="/static/home-v8.css?v=15">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/home-v8.css?v=17">{% endblock %}
 {% block body %}
 <div class="premium-site">
   <header class="site-header" id="siteHeader">
@@ -24,7 +24,7 @@
     <section class="hero" id="home">
       <div class="hero-doctor" data-reveal="left">
         <div class="doctor-backdrop"></div>
-        <img src="/static/uploads/doctor/wael-doctor-cutout-v6.png" alt="{{settings.doctor_name_ar if l=='ar' else settings.doctor_name_en}}" fetchpriority="high">
+        <img src="{{settings.hero_image if settings.hero_image and settings.hero_image != '/static/uploads/doctor/wael-hero-v5.webp' else '/static/uploads/doctor/wael-doctor-cutout-v6.png'}}" alt="{{settings.doctor_name_ar if l=='ar' else settings.doctor_name_en}}" fetchpriority="high">
         {% if settings.video_enabled != '0' %}<button class="video-chip" type="button" data-video-open data-url="{{settings.video_url}}"><img src="{{settings.video_poster or '/static/uploads/doctor/wael-doctor-cutout-v6.png'}}" alt=""><span class="play">▶</span><span>{{settings.video_title_ar if l=='ar' else (settings.video_title_tr if l=='tr' else settings.video_title_en)}}</span></button>{% endif %}
       </div>
 

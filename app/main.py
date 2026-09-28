@@ -1,13 +1,14 @@
 from __future__ import annotations
+import math
 import os, re, json, uuid, hmac, hashlib, secrets, mimetypes, urllib.request
 from datetime import datetime, date, time, timedelta
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, String, Integer, DateTime, Date, Time, Text, Boolean, ForeignKey, UniqueConstraint, select, func
+from sqlalchemy import create_engine, String, Integer, DateTime, Date, Time, Text, Boolean, ForeignKey, UniqueConstraint, select, func, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker, Session
 from sqlalchemy.exc import IntegrityError
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -121,6 +122,20 @@ class TreatmentPlan(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
     title: Mapped[str] = mapped_column(String(200)); status: Mapped[str] = mapped_column(String(30), default="planned"); notes: Mapped[str] = mapped_column(Text, default="")
+
+    tooth: Mapped[str] = mapped_column(String(30), default="")
+    treatment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    cost: Mapped[Optional[float]] = mapped_column(nullable=True)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=datetime.utcnow, nullable=True)
+
+class PatientFile(Base):
+    __tablename__="patient_files"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    stored_name: Mapped[str] = mapped_column(String(80))
+    mime: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class Message(Base):
     __tablename__="messages"
@@ -238,12 +253,17 @@ templates=Jinja2Templates(directory=BASE_DIR/"app"/"templates")
 async def security_headers(request:Request, call_next):
     r=await call_next(request)
     r.headers["X-Content-Type-Options"]="nosniff"; r.headers["X-Frame-Options"]="DENY"; r.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
-    r.headers["Content-Security-Policy"]="default-src 'self'; img-src 'self' data: https://*.openstreetmap.org; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src https://www.youtube.com https://player.vimeo.com; frame-ancestors 'none'"
+    r.headers["Content-Security-Policy"]="default-src 'self'; img-src 'self' data: blob: https://*.openstreetmap.org; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src https://www.youtube.com https://player.vimeo.com; frame-ancestors 'none'"
     return r
 
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(engine)
+    # Additive, repeatable migration; existing plans remain untouched.
+    columns={c["name"] for c in inspect(engine).get_columns("treatment_plans")}
+    with engine.begin() as connection:
+        for name,kind in {"tooth":"VARCHAR(30) DEFAULT ''", "treatment_date":"DATE", "cost":"FLOAT", "created_at":"TIMESTAMP"}.items():
+            if name not in columns: connection.execute(text(f"ALTER TABLE treatment_plans ADD COLUMN {name} {kind}"))
     with SessionLocal() as s:
         if not s.scalar(select(User).where(User.email==ADMIN_EMAIL)):
             s.add(User(email=ADMIN_EMAIL,password_hash=hash_password(ADMIN_PASSWORD),role="admin"))
@@ -309,12 +329,23 @@ def availability(day:date, service_id:int, s:Session=Depends(db)):
     svc=s.get(Service,service_id)
     if not wh or not wh.enabled or not svc or not svc.active: return {"slots":[]}
     cur=datetime.combine(day,wh.start_time); end=datetime.combine(day,wh.end_time); step=timedelta(minutes=max(10,svc.duration)); out=[]
-    reserved=set(s.scalars(select(Appointment.slot_key).where(Appointment.slot_key!=None, Appointment.starts_at>=datetime.combine(day,time.min), Appointment.starts_at<=datetime.combine(day,time.max))).all())
+    reserved=s.scalars(select(Appointment).where(Appointment.slot_key!=None, Appointment.starts_at>=datetime.combine(day,time.min), Appointment.starts_at<=datetime.combine(day,time.max))).all()
     while cur+step<=end:
-        in_break=wh.break_start and wh.break_end and cur.time()>=wh.break_start and cur.time()<wh.break_end
-        if not in_break and slot_key(cur) not in reserved and (day>date.today() or cur>datetime.now()+timedelta(minutes=30)): out.append(cur.strftime("%H:%M"))
+        in_break=wh.break_start and wh.break_end and cur<datetime.combine(day,wh.break_end) and cur+step>datetime.combine(day,wh.break_start)
+        overlaps=any(cur<a.starts_at+timedelta(minutes=max(10,a.service.duration)) and cur+step>a.starts_at for a in reserved)
+        if not in_break and not overlaps and (day>date.today() or cur>datetime.now()+timedelta(minutes=30)): out.append(cur.strftime("%H:%M"))
         cur+=step
     return {"slots":out}
+
+@app.get("/api/availability/nearest")
+def nearest_availability(service_id:int,s:Session=Depends(db)):
+    svc=s.get(Service,service_id)
+    if not svc or not svc.active: raise HTTPException(404,"service")
+    for offset in range(30):
+        day=date.today()+timedelta(days=offset)
+        slots=availability(day,service_id,s)["slots"]
+        if slots: return {"day":day.isoformat(),"time":slots[0]}
+    return {"day":None,"time":None}
 
 def send_email(s:Session,to:str,subject:str,html:str):
     if not to: return None
@@ -403,9 +434,9 @@ def appointment_status(aid:int,status:str=Form(...),new_day:str=Form(""),new_tim
     return RedirectResponse("/admin#appointments",303)
 
 @app.post("/admin/services")
-def service_create(title_ar:str=Form(...),title_tr:str=Form(...),title_en:str=Form(...),description_ar:str=Form(""),description_tr:str=Form(""),description_en:str=Form(""),duration:int=Form(30),price:str=Form(""),s:Session=Depends(db),u:User=Depends(require_admin)):
+def service_create(title_ar:str=Form(...),title_tr:str=Form(...),title_en:str=Form(...),description_ar:str=Form(""),description_tr:str=Form(""),description_en:str=Form(""),duration:int=Form(30),price:str=Form(""),image:str=Form(""),s:Session=Depends(db),u:User=Depends(require_admin)):
     slug=re.sub(r"[^a-z0-9]+","-",title_en.lower()).strip("-")+"-"+secrets.token_hex(2)
-    svc=Service(slug=slug,title_ar=title_ar,title_tr=title_tr,title_en=title_en,description_ar=description_ar,description_tr=description_tr,description_en=description_en,duration=max(10,duration),price=float(price) if price else None,sort_order=(s.scalar(select(func.max(Service.sort_order))) or 0)+1); s.add(svc); s.flush(); audit(s,"service.created","service",svc.id,title_ar,u.email); s.commit(); return RedirectResponse("/admin#services",303)
+    svc=Service(image=valid_image(image),slug=slug,title_ar=title_ar,title_tr=title_tr,title_en=title_en,description_ar=description_ar,description_tr=description_tr,description_en=description_en,duration=max(10,duration),price=valid_cost(price),sort_order=(s.scalar(select(func.max(Service.sort_order))) or 0)+1); s.add(svc); s.flush(); audit(s,"service.created","service",svc.id,title_ar,u.email); s.commit(); return RedirectResponse("/admin#services",303)
 
 @app.post("/admin/services/{sid}/toggle")
 def service_toggle(sid:int,s:Session=Depends(db),u:User=Depends(require_admin)):
@@ -433,35 +464,97 @@ def settings_save(
     audit(s,"site.settings_updated","site","settings",json.dumps(vals,ensure_ascii=False),u.email); s.commit(); return RedirectResponse("/admin#cms",303)
 
 @app.post("/admin/media")
-async def media_upload(category:str=Form("General"),file:UploadFile=File(...),s:Session=Depends(db),u:User=Depends(require_admin)):
+async def media_upload(request:Request,category:str=Form("General"),file:UploadFile=File(...),s:Session=Depends(db),u:User=Depends(require_admin)):
     mime=file.content_type or mimetypes.guess_type(file.filename or "")[0] or ""
     if mime not in ALLOWED_MIME: raise HTTPException(415,"unsupported file")
     content=await file.read(MAX_UPLOAD+1)
     if len(content)>MAX_UPLOAD: raise HTTPException(413,"file too large")
     ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","application/pdf":"pdf","video/mp4":"mp4"}[mime]; name=f"{uuid.uuid4().hex}.{ext}"; path=UPLOAD_DIR/name; path.write_bytes(content)
-    m=Media(filename=(file.filename or name)[:255],path=f"/static/uploads/media/{name}",mime=mime,category=category[:80]); s.add(m); s.flush(); audit(s,"media.uploaded","media",m.id,m.filename,u.email); s.commit(); return RedirectResponse("/admin#media",303)
+    m=Media(filename=(file.filename or name)[:255],path=f"/static/uploads/media/{name}",mime=mime,category=category[:80]); s.add(m); s.flush(); audit(s,"media.uploaded","media",m.id,m.filename,u.email); s.commit(); return JSONResponse({"path":m.path}) if request.headers.get("accept")=="application/json" else RedirectResponse("/admin#media",303)
 
 @app.post("/admin/patients/{pid}/note")
 def add_note(pid:int,note:str=Form(...),s:Session=Depends(db),u:User=Depends(require_admin)):
     if not s.get(Patient,pid): raise HTTPException(404)
     s.add(ClinicalNote(patient_id=pid,note=note)); audit(s,"patient.note_added","patient",pid,"clinical note",u.email); s.commit(); return RedirectResponse(f"/admin/patients/{pid}",303)
 
+def valid_cost(value):
+    if not str(value).strip(): return None
+    try: number=float(value)
+    except ValueError: raise HTTPException(422,"invalid cost")
+    if not math.isfinite(number) or number<0: raise HTTPException(422,"invalid cost")
+    return number
+
+def valid_image(value):
+    value=value.strip()
+    if value and (not value.startswith('/static/uploads/media/') or '..' in value or not value.lower().endswith(('.jpg','.jpeg','.png','.webp'))):
+        raise HTTPException(422,"Choose an uploaded image")
+    return value
+
+def owned(s, model, key, pid):
+    item=s.get(model,key)
+    if not item or item.patient_id!=pid: raise HTTPException(404)
+    return item
+
 @app.post("/admin/patients/{pid}/plan")
-def add_plan(pid:int,title:str=Form(...),status:str=Form("planned"),notes:str=Form(""),s:Session=Depends(db),u:User=Depends(require_admin)):
-    if status not in {"planned","in_progress","completed"}: raise HTTPException(422)
-    s.add(TreatmentPlan(patient_id=pid,title=title,status=status,notes=notes)); audit(s,"patient.plan_added","patient",pid,title,u.email); s.commit(); return RedirectResponse(f"/admin/patients/{pid}",303)
+@app.post("/admin/patients/{pid}/plan/{plan_id}/edit")
+def save_plan(pid:int,plan_id:int=0,title:str=Form(...),status:str=Form("planned"),notes:str=Form(""),tooth:str=Form(""),treatment_date:str=Form(""),cost:str=Form(""),s:Session=Depends(db),u:User=Depends(require_admin)):
+    if not s.get(Patient,pid): raise HTTPException(404)
+    if status not in {"planned","in_progress","completed"} or not title.strip() or len(tooth)>30: raise HTTPException(422)
+    try: day=date.fromisoformat(treatment_date) if treatment_date else None
+    except ValueError: raise HTTPException(422,"invalid date")
+    amount=valid_cost(cost)
+    x=owned(s,TreatmentPlan,plan_id,pid) if plan_id else TreatmentPlan(patient_id=pid)
+    x.title=title.strip(); x.status=status; x.notes=notes; x.tooth=tooth; x.treatment_date=day; x.cost=amount
+    s.add(x);s.flush();audit(s,"patient.plan_updated" if plan_id else "patient.plan_added","patient",pid,title,u.email);s.commit()
+    return RedirectResponse(f"/admin/patients/{pid}#plans",303)
+
+@app.post("/admin/patients/{pid}/plan/{plan_id}/delete")
+def delete_plan(pid:int,plan_id:int,s:Session=Depends(db),u:User=Depends(require_admin)):
+    x=owned(s,TreatmentPlan,plan_id,pid);s.delete(x);audit(s,"patient.plan_deleted","patient",pid,x.title,u.email);s.commit()
+    return RedirectResponse(f"/admin/patients/{pid}#plans",303)
+
+@app.post("/admin/patients/{pid}/files")
+async def patient_upload(pid:int,file:UploadFile=File(...),s:Session=Depends(db),u:User=Depends(require_admin)):
+    if not s.get(Patient,pid): raise HTTPException(404)
+    mime=file.content_type
+    if mime not in {"image/jpeg","image/png","image/webp","application/pdf"}: raise HTTPException(415)
+    content=await file.read(MAX_UPLOAD+1)
+    if not content or len(content)>MAX_UPLOAD: raise HTTPException(413)
+    folder=DATA_DIR/'patient_files';folder.mkdir(exist_ok=True)
+    name=uuid.uuid4().hex;path=folder/name;path.write_bytes(content)
+    x=PatientFile(patient_id=pid,filename=Path((file.filename or 'file').replace('\\','/')).name[:255],stored_name=name,mime=mime)
+    try:
+        s.add(x);audit(s,"patient.file_added","patient",pid,x.filename,u.email);s.commit()
+    except Exception:
+        path.unlink(missing_ok=True);raise
+    return RedirectResponse(f"/admin/patients/{pid}#files",303)
+
+@app.get("/admin/patients/{pid}/files/{fid}")
+def patient_download(pid:int,fid:int,s:Session=Depends(db),u:User=Depends(require_admin)):
+    x=owned(s,PatientFile,fid,pid);path=DATA_DIR/'patient_files'/x.stored_name
+    if not path.is_file(): raise HTTPException(404)
+    return FileResponse(path,media_type=x.mime,filename=x.filename,headers={"Cache-Control":"no-store"})
+
+@app.post("/admin/patients/{pid}/files/{fid}/delete")
+def patient_delete_file(pid:int,fid:int,s:Session=Depends(db),u:User=Depends(require_admin)):
+    x=owned(s,PatientFile,fid,pid);path=DATA_DIR/'patient_files'/x.stored_name
+    s.delete(x);audit(s,"patient.file_deleted","patient",pid,x.filename,u.email);s.commit();path.unlink(missing_ok=True)
+    return RedirectResponse(f"/admin/patients/{pid}#files",303)
 
 @app.get("/admin/patients/{pid}",response_class=HTMLResponse)
 def patient_file(pid:int,request:Request,s:Session=Depends(db),u:User=Depends(require_admin)):
     p=s.get(Patient,pid)
     if not p: raise HTTPException(404)
     appts=s.scalars(select(Appointment).where(Appointment.patient_id==pid).order_by(Appointment.starts_at.desc())).all(); notes=s.scalars(select(ClinicalNote).where(ClinicalNote.patient_id==pid).order_by(ClinicalNote.id.desc())).all(); plans=s.scalars(select(TreatmentPlan).where(TreatmentPlan.patient_id==pid).order_by(TreatmentPlan.id.desc())).all()
-    return templates.TemplateResponse(request,"patient.html",{"request":request,"p":p,"appts":appts,"notes":notes,"plans":plans})
+    files=s.scalars(select(PatientFile).where(PatientFile.patient_id==pid).order_by(PatientFile.id.desc())).all()
+    events=[(p.created_at,"إنشاء ملف المريض")]+[(n.created_at,"ملاحظة سريرية: "+n.note) for n in notes]+[(a.starts_at,"موعد: "+a.service.title_ar+" · "+a.status) for a in appts]+[(f.created_at,"إرفاق ملف: "+f.filename) for f in files]+[(x.created_at,"إضافة علاج: "+x.title) for x in plans if x.created_at]
+    events.sort(key=lambda e:e[0],reverse=True)
+    return templates.TemplateResponse(request,"patient.html",{"request":request,"p":p,"appts":appts,"notes":notes,"plans":plans,"files":files,"events":events})
 
 @app.post("/admin/cases")
 def case_create(title:str=Form(...),treatment_type:str=Form(""),description:str=Form(""),before_image:str=Form(""),after_image:str=Form(""),status:str=Form("draft"),s:Session=Depends(db),u:User=Depends(require_admin)):
     if status not in {"draft","private","published"}: raise HTTPException(422)
-    x=ClinicalCase(title=title,treatment_type=treatment_type,description=description,before_image=before_image,after_image=after_image,status=status,case_date=date.today()); s.add(x); s.flush(); audit(s,"case.created","clinical_case",x.id,title,u.email); s.commit(); return RedirectResponse("/admin#cases",303)
+    x=ClinicalCase(title=title,treatment_type=treatment_type,description=description,before_image=valid_image(before_image),after_image=valid_image(after_image),status=status,case_date=date.today()); s.add(x); s.flush(); audit(s,"case.created","clinical_case",x.id,title,u.email); s.commit(); return RedirectResponse("/admin#cases",303)
 
 @app.post("/admin/reviews")
 def review_create(name:str=Form(...),body_ar:str=Form(""),body_tr:str=Form(""),body_en:str=Form(""),rating:int=Form(5),published:str=Form("0"),s:Session=Depends(db),u:User=Depends(require_admin)):
@@ -488,3 +581,33 @@ def robots(): return HTMLResponse(f"User-agent: *\nAllow: /\nDisallow: /admin\nS
 async def not_found(request,exc): return templates.TemplateResponse(request,"error.html",{"request":request,"code":404,"message":"الصفحة غير موجودة"},status_code=404)
 @app.exception_handler(500)
 async def server_error(request,exc): return templates.TemplateResponse(request,"error.html",{"request":request,"code":500,"message":"حدث خطأ غير متوقع"},status_code=500)
+
+@app.post("/admin/cases/{cid}/edit")
+async def case_edit(cid:int,request:Request,s:Session=Depends(db),u:User=Depends(require_admin)):
+    x=s.get(ClinicalCase,cid)
+    if not x: raise HTTPException(404)
+    f=await request.form()
+    if not f.get('title','').strip() or f.get('status') not in {'draft','private','published'}: raise HTTPException(422)
+    for k in ['title','treatment_type','description','status']: setattr(x,k,str(f.get(k,'')))
+    for k in ['before_image','after_image']:
+        value=str(f.get(k,''));setattr(x,k,valid_image(value) if value!=getattr(x,k) else value)
+    audit(s,"case.updated","clinical_case",cid,x.title,u.email);s.commit();return RedirectResponse('/admin#cases',303)
+
+@app.post("/admin/cases/{cid}/delete")
+def case_delete(cid:int,s:Session=Depends(db),u:User=Depends(require_admin)):
+    x=s.get(ClinicalCase,cid)
+    if not x: raise HTTPException(404)
+    s.delete(x);audit(s,"case.deleted","clinical_case",cid,x.title,u.email);s.commit();return RedirectResponse('/admin#cases',303)
+
+@app.post("/admin/services/{sid}/edit")
+async def service_edit(sid:int,request:Request,s:Session=Depends(db),u:User=Depends(require_admin)):
+    x=s.get(Service,sid)
+    if not x: raise HTTPException(404)
+    f=await request.form()
+    if any(not str(f.get('title_'+lang,'')).strip() for lang in ['ar','tr','en']): raise HTTPException(422)
+    try: duration=int(f.get('duration',30))
+    except ValueError: raise HTTPException(422)
+    if duration<10: raise HTTPException(422)
+    x.duration=duration;x.price=valid_cost(f.get('price',''));x.image=valid_image(str(f.get('image',''))) if str(f.get('image',''))!=x.image else x.image
+    for k in ['title_ar','title_tr','title_en','description_ar','description_tr','description_en']: setattr(x,k,str(f.get(k,'')))
+    audit(s,"service.updated","service",sid,x.title_ar,u.email);s.commit();return RedirectResponse('/admin#services',303)

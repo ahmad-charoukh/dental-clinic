@@ -8,3 +8,7 @@ node_modules/
 data/test.db
 data/wael_export.db
 dr-wael-netlify.zip
+
+wael.db
+data/wael.db
+app/static/uploads/media/

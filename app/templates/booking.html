@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}{{t.book}} — Dr. Wael Al-Bash{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/booking-v8.css">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/booking-v8.css?v=2">{% endblock %}
 {% block body %}
 <div class="booking-page">
   <header class="booking-header"><a class="booking-brand" href="/?lang={{l}}"><span class="tooth-mark"><svg viewBox="0 0 48 48"><path d="M15 7c-6 2-8 8-6 15 1 4 4 6 5 12 1 6 4 8 6 3 2-5 2-8 4-8s2 3 4 8c2 5 5 3 6-3 1-6 4-8 5-12 2-7 0-13-6-15-4-1-7 1-9 1s-5-2-9-1Z" fill="none" stroke="currentColor" stroke-width="2.6"/></svg></span><span><b>{{settings.doctor_name_ar if l=='ar' else settings.doctor_name_en}}</b><small>{{ 'طب وجراحة الفم والأسنان' if l=='ar' else ('Diş Hekimliği' if l=='tr' else 'Dentistry') }}</small></span></a><div class="booking-lang"><a href="/booking?lang=ar" class="{{'active' if l=='ar'}}">عربي</a><a href="/booking?lang=tr" class="{{'active' if l=='tr'}}">TR</a><a href="/booking?lang=en" class="{{'active' if l=='en'}}">EN</a></div></header>
@@ -10,14 +10,14 @@
       <div class="progress" id="progress"><div class="step active" data-step="1"><i>1</i><span>{{ 'الخدمة' if l=='ar' else ('Hizmet' if l=='tr' else 'Service') }}</span></div><div class="step" data-step="2"><i>2</i><span>{{ 'التاريخ' if l=='ar' else ('Tarih' if l=='tr' else 'Date') }}</span></div><div class="step" data-step="3"><i>3</i><span>{{ 'الوقت' if l=='ar' else ('Saat' if l=='tr' else 'Time') }}</span></div><div class="step" data-step="4"><i>4</i><span>{{ 'البيانات' if l=='ar' else ('Bilgiler' if l=='tr' else 'Details') }}</span></div></div>
       <form id="bookingForm" class="booking-form">
         <label><span>{{t.choose}}</span><select id="service" required><option value="">— {{t.choose}} —</option>{% for s in services %}<option value="{{s.id}}" {% if request.query_params.get('service') == s.id|string %}selected{% endif %}>{{s.title}} · {{s.duration}} min</option>{% endfor %}</select></label>
-        <label><span>{{t.date}}</span><input id="day" type="date" required></label>
+        <button type="button" id="nearest" class="nearest-slot">{{ 'أقرب موعد متاح' if l=='ar' else ('İlk uygun randevu' if l=='tr' else 'Find the next available slot') }}</button><label><span>{{t.date}}</span><input id="day" type="date" required></label>
         <div class="slot-field"><span>{{t.time}}</span><div id="slots" class="slots"><p class="muted">{{ 'اختر الخدمة والتاريخ أولًا' if l=='ar' else ('Önce hizmet ve tarih seçin' if l=='tr' else 'Choose a service and date first') }}</p></div><input type="hidden" id="time" required></div>
         <div class="two"><label><span>{{t.name}}</span><input id="name" autocomplete="name" required></label><label><span>{{t.phone}}</span><input id="phone" inputmode="tel" autocomplete="tel" required></label></div>
         <label><span>{{t.email}}</span><input id="email" type="email" autocomplete="email"></label><label><span>{{t.notes}}</span><textarea id="notes"></textarea></label>
-        <button class="submit-booking" type="submit">{{t.submit}}<span>←</span></button><div id="msg" class="form-msg" role="status"></div>
+        <div id="bookingSummary" class="booking-summary" aria-live="polite" hidden></div><button class="submit-booking" type="submit">{{t.submit}}<span>←</span></button><div id="msg" class="form-msg" role="status"></div>
       </form>
     </section>
   </main>
 </div>
 {% endblock %}
-{% block scripts %}<script src="/static/booking-v8.js" defer></script><script>window.WAEL_LOCALE='{{l}}';</script>{% endblock %}
+{% block scripts %}<script src="/static/booking-v8.js?v=2" defer></script><script>window.WAEL_LOCALE='{{l}}';</script>{% endblock %}
