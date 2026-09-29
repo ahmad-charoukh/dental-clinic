@@ -142,6 +142,8 @@ async function settingsDict() {
 function invalid(detail="invalid_data",status=422){return Object.assign(new Error(detail),{status});}
 function validCost(value){if(!String(value||"").trim())return null;const n=Number(value);if(!Number.isFinite(n)||n<0)throw invalid("invalid cost");return n;}
 function validDay(value){if(!value)return null;if(!/^\d{4}-\d{2}-\d{2}$/.test(value)||Number.isNaN(Date.parse(value))||new Date(value).toISOString().slice(0,10)!==value)throw invalid("invalid date");return value;}
+function validIdentity(value){const v=String(value||"").trim();if(!/^\d{11}$/.test(v))throw invalid("invalid_identity");return v;}
+function validBirthDate(value){const v=validDay(String(value||""));if(!v)throw invalid("birth_date_required");const now=localNow(),today=`${now.year}-${now.month}-${now.day}`;if(v>today)throw invalid("invalid_birth_date");return v;}
 async function validImage(value,existing=""){
   value=String(value||"").trim();if(!value || value===existing)return value;
   if(!/^\/media\/[a-f0-9-]+\.(jpg|jpeg|png|webp)$/i.test(value) || !await one("SELECT id FROM media WHERE path=$1 AND mime LIKE 'image/%'",[value]))throw invalid("Choose an uploaded image");
@@ -169,7 +171,7 @@ async function requireAdmin(req) {
   if (!u || !["admin","doctor","assistant","receptionist"].includes(u.role)) return null;
   return u;
 }
-function serviceView(x,l){return {id:x.id,slug:x.slug,title:x[`title_${l}`],description:x[`description_${l}`],duration:x.duration,sessions:x.sessions,price:x.price,image:x.image};}
+function serviceView(x,l){return {id:x.id,slug:x.slug,title:x[`title_${l}`],description:x[`description_${l}`],sessions:x.sessions,price:x.price,image:x.image};}
 function apptView(r){return {...r,starts_at:dateProxy(r.starts_at),patient:{id:r.patient_id,name:r.patient_name,phone:r.patient_phone,email:r.patient_email},service:{id:r.service_id,title_ar:r.service_title_ar,title_en:r.service_title_en,slug:r.service_slug}};}
 function noteView(r){return {...r,created_at:dateProxy(r.created_at)};}
 function render(name, ctx={}) { return env.render(name,ctx); }
@@ -186,20 +188,33 @@ async function availableSlots(day, serviceId, executor=db.pool, excludeId=0) {
   const now=localNow(), today=`${now.year}-${now.month}-${now.day}`;
   if (day < today) return [];
   if (await one("SELECT id FROM blocked_dates WHERE day=$1",[day])) return [];
-  const wh=await one("SELECT * FROM working_hours WHERE weekday=$1",[weekdayPython(day)]);
-  const svc=await one("SELECT * FROM services WHERE id=$1 AND active=TRUE",[serviceId]);
-  if (!wh || !wh.enabled || !svc) return [];
-  const reservedRows=await query("SELECT a.starts_at,s.duration FROM appointments a JOIN services s ON s.id=a.service_id WHERE a.slot_key IS NOT NULL AND a.starts_at::date=$1::date AND a.id<>$2",[day,excludeId]);
-  const start=minutes(wh.start_time), end=minutes(wh.end_time), step=Math.max(10,Number(svc.duration||30));
-  const bs=wh.break_start ? minutes(wh.break_start):null, be=wh.break_end?minutes(wh.break_end):null;
-  const out=[];
-  const nowMin=Number(now.hour)*60+Number(now.minute)+30;
-  for(let cur=start; cur+step<=end; cur+=step){
-    const t=hhmm(cur); const inBreak=bs!==null&&be!==null&&cur<be&&cur+step>bs;
-    const overlaps=reservedRows.some(a=>{const at=minutes(formatDate(a.starts_at).slice(11));return cur<at+Math.max(10,a.duration)&&cur+step>at;});
-    if(!inBreak && !overlaps && (day>today || cur>nowMin)) out.push(t);
+  const [wh,svc,overrides,reservedRows]=await Promise.all([
+    one("SELECT * FROM working_hours WHERE weekday=$1",[weekdayPython(day)]),
+    one("SELECT * FROM services WHERE id=$1 AND active=TRUE",[serviceId]),
+    query("SELECT slot_time,is_open FROM appointment_slot_overrides WHERE day=$1 ORDER BY slot_time",[day]),
+    query("SELECT a.starts_at,s.duration FROM appointments a JOIN services s ON s.id=a.service_id WHERE a.slot_key IS NOT NULL AND a.starts_at::date=$1::date AND a.id<>$2",[day,excludeId])
+  ]);
+  if (!svc) return [];
+  const step=Math.max(10,Number(svc.duration||30)), candidates=new Set();
+  if(wh?.enabled){
+    const start=minutes(wh.start_time), end=minutes(wh.end_time);
+    const bs=wh.break_start ? minutes(wh.break_start):null, be=wh.break_end?minutes(wh.break_end):null;
+    for(let cur=start; cur+step<=end; cur+=step){
+      const t=hhmm(cur), inBreak=bs!==null&&be!==null&&cur<be&&cur+step>bs;
+      if(!inBreak)candidates.add(t);
+    }
   }
-  return out;
+  for(const o of overrides){
+    const t=String(o.slot_time||"").slice(0,5);
+    if(!/^\d{2}:\d{2}$/.test(t))continue;
+    if(o.is_open)candidates.add(t); else candidates.delete(t);
+  }
+  const nowMin=Number(now.hour)*60+Number(now.minute)+30;
+  return [...candidates].sort().filter(t=>{
+    const cur=minutes(t);
+    if(day===today && cur<=nowMin)return false;
+    return !reservedRows.some(a=>{const at=minutes(formatDate(a.starts_at).slice(11));return cur<at+Math.max(10,a.duration)&&cur+step>at;});
+  });
 }
 async function audit(action, entity, entityId="", detail="", actor="system") {
   await db.pool.query("INSERT INTO audit_logs(actor,action,entity,entity_id,detail,created_at) VALUES($1,$2,$3,$4,$5,NOW())",[actor,action,entity,String(entityId),detail]);
@@ -271,7 +286,8 @@ async function handle(req) {
 
   if(method==="POST" && path==="/api/bookings"){
     let p; try{p=await req.json();}catch{return json({detail:"invalid_json"},422);}
-    const serviceId=Number(p.service_id), day=String(p.day||""), tm=String(p.time||""), name=String(p.name||"").trim(), phone=String(p.phone||"").trim(), email=String(p.email||"").trim(), notes=String(p.notes||""), locale=I18N[p.locale]?p.locale:"ar";
+    const serviceId=Number(p.service_id), day=String(p.day||""), tm=String(p.time||""), name=String(p.name||"").trim(), phone=String(p.phone||"").trim(), notes=String(p.notes||""), locale=I18N[p.locale]?p.locale:"ar";
+    let identityNo,birthDate; try{identityNo=validIdentity(p.identity_no);birthDate=validBirthDate(p.birth_date);}catch(e){return json({detail:e.message||"invalid_data"},422);}
     if(name.length<2 || !isPhone(phone) || !/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{2}:\d{2}$/.test(tm)) return json({detail:"invalid_data"},422);
     const svc=await one("SELECT * FROM services WHERE id=$1 AND active=TRUE",[serviceId]); if(!svc) return json({detail:"service"},404);
     const slots=await availableSlots(day,serviceId); if(!slots.includes(tm)) return json({detail:"slot_unavailable"},409);
@@ -280,16 +296,16 @@ async function handle(req) {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(8675309)");
       if(!(await availableSlots(day,serviceId,client)).includes(tm)){await client.query("ROLLBACK");return json({detail:"slot_unavailable"},409);}
-      let pr=(await client.query("SELECT * FROM patients WHERE phone=$1 ORDER BY id LIMIT 1",[phone])).rows[0];
-      if(!pr) pr=(await client.query("INSERT INTO patients(name,phone,email,created_at) VALUES($1,$2,$3,NOW()) RETURNING *",[name,phone,email])).rows[0];
-      else await client.query("UPDATE patients SET name=$1,email=CASE WHEN $2<>'' THEN $2 ELSE email END WHERE id=$3",[name,email,pr.id]);
+      let pr=(await client.query("SELECT * FROM patients WHERE identity_no=$1 ORDER BY id LIMIT 1",[identityNo])).rows[0];
+      if(!pr) pr=(await client.query("SELECT * FROM patients WHERE phone=$1 AND (identity_no IS NULL OR identity_no='') ORDER BY id LIMIT 1",[phone])).rows[0];
+      if(!pr) pr=(await client.query("INSERT INTO patients(name,phone,email,identity_no,birth_date,created_at) VALUES($1,$2,'',$3,$4,NOW()) RETURNING *",[name,phone,identityNo,birthDate])).rows[0];
+      else await client.query("UPDATE patients SET name=$1,phone=$2,identity_no=$3,birth_date=$4 WHERE id=$5",[name,phone,identityNo,birthDate,pr.id]);
       const starts=`${day} ${tm}:00`;
       appt=(await client.query("INSERT INTO appointments(patient_id,service_id,starts_at,slot_key,status,notes,locale,created_at) VALUES($1,$2,$3,$4,'pending',$5,$6,NOW()) RETURNING *",[pr.id,serviceId,starts,slotKey(day,tm),notes,locale])).rows[0];
       await client.query("INSERT INTO audit_logs(actor,action,entity,entity_id,detail,created_at) VALUES('public','appointment.created','appointment',$1,$2,NOW())",[String(appt.id),`${starts} ${svc.slug}`]);
       await client.query("COMMIT");
-      const [subj,body]=emailText(locale,"pending",{...appt,service_title_en:svc.title_en}); await sendEmail(email,subj,body);
       return json({ok:true,id:appt.id,status:appt.status,starts_at:appt.starts_at});
-    }catch(e){ await client.query("ROLLBACK").catch(()=>{}); if(e?.code==="23505") return json({detail:"slot_unavailable"},409); throw e; } finally{client.release();}
+    }catch(e){ await client.query("ROLLBACK").catch(()=>{}); if(e?.code==="23505") return json({detail:e.constraint==="patients_identity_no_uq"?"identity_in_use":"slot_unavailable"},e.constraint==="patients_identity_no_uq"?422:409); throw e; } finally{client.release();}
   }
 
   let m=path.match(/^\/booking\/confirmation\/(\d+)$/);
@@ -320,12 +336,37 @@ async function handle(req) {
 
     if(method==="GET" && path==="/admin"){
       const today=localNow(); const d=`${today.year}-${today.month}-${today.day}`;
-      const [statToday,statPatients,statPending,statMessages,appts0,patients,services,cases,media,messages,reviews,faqs,articles,settings]=await Promise.all([
+      const [statToday,statPatients,statPending,statMessages,appts0,patients,services,cases,media,messages,reviews,faqs,articles,settings,workingHours,blockedDates,slotOverrides]=await Promise.all([
         one("SELECT COUNT(*)::int AS n FROM appointments WHERE starts_at::date=$1::date",[d]),one("SELECT COUNT(*)::int AS n FROM patients"),one("SELECT COUNT(*)::int AS n FROM appointments WHERE status='pending'"),one("SELECT COUNT(*)::int AS n FROM messages"),
         query("SELECT a.*,p.name patient_name,p.phone patient_phone,p.email patient_email,s.title_ar service_title_ar,s.title_en service_title_en,s.slug service_slug FROM appointments a JOIN patients p ON p.id=a.patient_id JOIN services s ON s.id=a.service_id ORDER BY a.starts_at DESC LIMIT 50"),
-        query("SELECT * FROM patients ORDER BY id DESC LIMIT 50"),query("SELECT * FROM services ORDER BY sort_order,id"),query("SELECT * FROM clinical_cases ORDER BY id DESC"),query("SELECT * FROM media ORDER BY id DESC LIMIT 50"),query("SELECT * FROM messages ORDER BY id DESC LIMIT 30"),query("SELECT * FROM reviews ORDER BY id DESC"),query("SELECT * FROM faq ORDER BY sort_order,id"),query("SELECT * FROM articles ORDER BY id DESC"),settingsDict()
+        query("SELECT * FROM patients ORDER BY id DESC LIMIT 50"),query("SELECT * FROM services ORDER BY sort_order,id"),query("SELECT * FROM clinical_cases ORDER BY id DESC"),query("SELECT * FROM media ORDER BY id DESC LIMIT 50"),query("SELECT * FROM messages ORDER BY id DESC LIMIT 30"),query("SELECT * FROM reviews ORDER BY id DESC"),query("SELECT * FROM faq ORDER BY sort_order,id"),query("SELECT * FROM articles ORDER BY id DESC"),settingsDict(),
+        query("SELECT * FROM working_hours ORDER BY weekday"),query("SELECT * FROM blocked_dates ORDER BY day DESC LIMIT 60"),query("SELECT * FROM appointment_slot_overrides ORDER BY day DESC,slot_time LIMIT 120")
       ]);
-      return html(render("admin.html",{u,stats:{today:statToday.n,patients:statPatients.n,pending:statPending.n,messages:statMessages.n},appts:appts0.map(apptView),patients,services,cases,media,messages,settings,reviews,faqs,articles}));
+      const wh=workingHours.map(x=>({...x,start_time:String(x.start_time).slice(0,5),end_time:String(x.end_time).slice(0,5),break_start:x.break_start?String(x.break_start).slice(0,5):"",break_end:x.break_end?String(x.break_end).slice(0,5):""}));
+      return html(render("admin.html",{u,stats:{today:statToday.n,patients:statPatients.n,pending:statPending.n,messages:statMessages.n},appts:appts0.map(apptView),patients,services,cases,media,messages,settings,reviews,faqs,articles,working_hours:wh,blocked_dates:blockedDates.map(x=>({...x,day:formatDate(x.day,"%Y-%m-%d")})),slot_overrides:slotOverrides.map(x=>({...x,day:formatDate(x.day,"%Y-%m-%d"),slot_time:String(x.slot_time).slice(0,5)}))}));
+    }
+
+    if(method==="POST" && path==="/admin/schedule/working-hours"){
+      const f=await req.formData(),weekday=Number(f.get("weekday")),enabled=!!f.get("enabled"),start=String(f.get("start_time")||""),end=String(f.get("end_time")||""),bs=String(f.get("break_start")||""),be=String(f.get("break_end")||"");
+      if(!Number.isInteger(weekday)||weekday<0||weekday>6||!/^\d{2}:\d{2}$/.test(start)||!/^\d{2}:\d{2}$/.test(end)||minutes(start)>=minutes(end)||(bs&&!/^\d{2}:\d{2}$/.test(bs))||(be&&!/^\d{2}:\d{2}$/.test(be))||((bs||be)&&(!bs||!be||minutes(bs)>=minutes(be))))throw invalid();
+      await query("INSERT INTO working_hours(weekday,enabled,start_time,end_time,break_start,break_end) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(weekday) DO UPDATE SET enabled=EXCLUDED.enabled,start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,break_start=EXCLUDED.break_start,break_end=EXCLUDED.break_end",[weekday,enabled,start,end,bs||null,be||null]);
+      await audit("schedule.working_hours_updated","schedule",weekday,`${enabled?"open":"closed"} ${start}-${end}`,u.email);return redirect("/admin#schedule");
+    }
+    if(method==="POST" && path==="/admin/schedule/block-date"){
+      const f=await req.formData(),day=validDay(String(f.get("day")||"")),reason=String(f.get("reason")||"إغلاق يدوي").trim().slice(0,200)||"إغلاق يدوي";
+      if(!day)throw invalid();await query("INSERT INTO blocked_dates(day,reason) VALUES($1,$2) ON CONFLICT(day) DO UPDATE SET reason=EXCLUDED.reason",[day,reason]);await audit("schedule.day_blocked","schedule",day,reason,u.email);return redirect("/admin#schedule");
+    }
+    if(method==="POST" && path==="/admin/schedule/unblock-date"){
+      const f=await req.formData(),day=validDay(String(f.get("day")||""));if(!day)throw invalid();await query("DELETE FROM blocked_dates WHERE day=$1",[day]);await audit("schedule.day_unblocked","schedule",day,"",u.email);return redirect("/admin#schedule");
+    }
+    if(method==="POST" && path==="/admin/schedule/slot"){
+      const f=await req.formData(),day=validDay(String(f.get("day")||"")),tm=String(f.get("time")||""),state=String(f.get("state")||"");
+      if(!day||!/^\d{2}:\d{2}$/.test(tm)||!["open","closed"].includes(state))throw invalid();
+      await query("INSERT INTO appointment_slot_overrides(day,slot_time,is_open,created_at) VALUES($1,$2,$3,NOW()) ON CONFLICT(day,slot_time) DO UPDATE SET is_open=EXCLUDED.is_open,created_at=NOW()",[day,tm,state==="open"]);
+      await audit(state==="open"?"schedule.slot_opened":"schedule.slot_closed","schedule",`${day} ${tm}`,"",u.email);return redirect("/admin#schedule");
+    }
+    if(method==="POST" && path==="/admin/schedule/slot/remove"){
+      const f=await req.formData(),id=Number(f.get("id"));if(!Number.isInteger(id)||id<1)throw invalid();await query("DELETE FROM appointment_slot_overrides WHERE id=$1",[id]);await audit("schedule.slot_override_removed","schedule",id,"",u.email);return redirect("/admin#schedule");
     }
 
     m=path.match(/^\/admin\/appointments\/(\d+)\/status$/);
@@ -433,7 +474,7 @@ async function handle(req) {
       const events=[[p.created_at,"إنشاء ملف المريض"],...notes0.map(n=>[n.created_at,"ملاحظة سريرية: "+n.note]),...appts0.map(a=>[a.starts_at,"موعد: "+a.service_title_ar+" · "+a.status]),...files0.map(f=>[f.created_at,"إرفاق ملف: "+f.filename]),...plans0.filter(x=>x.created_at).map(x=>[x.created_at,"إضافة علاج: "+x.title])];
       events.sort((a,b)=>new Date(b[0])-new Date(a[0]));
       const plans=plans0.map(x=>({...x,treatment_date:x.treatment_date?formatDate(x.treatment_date,"%Y-%m-%d"):null}));
-      return html(render("patient.html",{p:{...p,created_at:dateProxy(p.created_at)},appts:appts0.map(apptView),notes:notes0.map(noteView),plans,files:files0.map(noteView),events:events.map(([at,label])=>[dateProxy(at),label])}));
+      return html(render("patient.html",{p:{...p,birth_date:p.birth_date?formatDate(p.birth_date,"%Y-%m-%d"):null,created_at:dateProxy(p.created_at)},appts:appts0.map(apptView),notes:notes0.map(noteView),plans,files:files0.map(noteView),events:events.map(([at,label])=>[dateProxy(at),label])}));
     }
 
     if(method==="POST" && path==="/admin/cases"){
