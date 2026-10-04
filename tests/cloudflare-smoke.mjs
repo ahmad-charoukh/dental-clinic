@@ -1,0 +1,17 @@
+import fs from 'node:fs';
+const base=process.env.TEST_URL||'http://127.0.0.1:8787';const vars=Object.fromEntries(fs.readFileSync('.dev.vars','utf8').split(/\r?\n/).filter(Boolean).map(l=>{const i=l.indexOf('=');return [l.slice(0,i),JSON.parse(l.slice(i+1))]}));
+let cookie='';const checks=[];
+async function req(path,body){let r;for(let retry=0;retry<3;retry++){try{r=await fetch(base+path,{method:body?'POST':'GET',headers:{'User-Agent':'Mozilla/5.0',...(cookie?{cookie}:{}),...(body?{'Content-Type':body instanceof URLSearchParams?'application/x-www-form-urlencoded':'application/json'}:{})},body:body?(body instanceof URLSearchParams?body:JSON.stringify(body)):undefined,redirect:'manual'});break;}catch(e){if(retry===2)throw e;}}return r;}
+function check(label,value){checks.push({label,pass:!!value});if(!value)console.log('FAIL '+label);}
+for(const l of ['ar','tr','en']){const r=await req('/?lang='+l),h=await r.text();check('home '+l,r.status===200&&h.includes('id="siteHeader"')&&h.includes('id="home"')&&h.includes('id="services"')&&h.includes('id="about"')&&h.includes('video-section')&&h.includes('id="cases"')&&h.includes('id="reviews"')&&h.includes('id="articles"')&&h.includes('id="faq"')&&h.includes('id="contact"')&&h.includes('<footer'));check('direction '+l,h.includes('dir="'+(l==='ar'?'rtl':'ltr')+'"'));for(const src of [...h.matchAll(/(?:src|href)="(\/static\/[^"?#]+)/g)].map(m=>m[1]))check('asset '+src,(await req(src)).status===200);}
+const booking=await req('/booking?lang=tr');const bh=await booking.text();check('booking',booking.status===200&&bh.includes('Kanal Tedavisi')&&!bh.includes('name="email"'));
+const near=await(await req('/api/availability/nearest?service_id=1')).json();check('nearest',near.day&&near.time);
+let data={name:'Deployment Test',phone:'+905550009999',identity_no:'99999999001',birth_date:'1990-01-01',service_id:1,day:near.day,time:near.time,locale:'tr'};
+const bookings=await Promise.all([req('/api/bookings',data),req('/api/bookings',{...data,identity_no:'99999999002'})]);check('double booking',bookings.filter(r=>r.status===200).length===1&&bookings.filter(r=>r.status===409).length===1);
+const created=await bookings.find(r=>r.status===200)?.json();check('create',created?.id);
+if(created)for(const [lang,marker] of [['ar','تم استلام طلب الموعد'],['tr','Randevu talebiniz alındı'],['en','Booking request received']]){const r=await req('/booking/confirmation/'+created.id+'?lang='+lang);check('confirmation '+lang,r.status===200&&(await r.text()).includes(marker));}
+const login=await req('/admin/login',new URLSearchParams({email:vars.ADMIN_EMAIL,password:vars.ADMIN_PASSWORD}));cookie=(login.headers.get('set-cookie')||'').split(';')[0];check('login',login.status===303&&cookie);check('session',/HttpOnly/.test(login.headers.get('set-cookie'))&&/SameSite=Strict/.test(login.headers.get('set-cookie')));
+const admin=await req('/admin');const ah=await admin.text();check('admin',admin.status===200&&ah.includes('Deployment Test'));const pm=ah.match(/\/admin\/patients\/(\d+)/);if(pm){const r=await req(pm[0]),p=await r.text();check('patient',r.status===200&&p.includes('99999999001')&&p.includes('1990-01-01'));}
+fs.writeFileSync('work/checks.json',JSON.stringify(checks,null,2));console.log('Checks '+checks.length+'; failures '+checks.filter(c=>!c.pass).length);fs.writeFileSync('work/test-record.json',JSON.stringify({created,near,cookie}));
+
+if(checks.some(c=>!c.pass))process.exitCode=1;

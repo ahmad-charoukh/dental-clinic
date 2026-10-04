@@ -1,20 +1,24 @@
-﻿{
+{
   "name": "dental-clinic",
   "main": "./cloudflare-app.mjs",
   "compatibility_date": "2026-10-04",
-
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": true
   },
-
   "d1_databases": [
     {
       "binding": "dr_wael_clinic_db",
       "database_name": "dr-wael-clinic-db",
-      "database_id": "240b29ed-9b20-4546-912d-ee940410d206"
+      "database_id": "240b29ed-9b20-4546-912d-ee940410d206",
+      "migrations_dir": "cloudflare/migrations"
     }
-  ]
+  ],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "build": {
+    "command": "npm run build"
+  }
 }
-

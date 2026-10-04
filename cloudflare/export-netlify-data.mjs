@@ -1,4 +1,4 @@
-﻿process.env.TZ = "UTC";
+process.env.TZ = "UTC";
 
 import fs from "node:fs";
 import { getDatabase } from "@netlify/database";
@@ -22,7 +22,6 @@ const tables = [
   "reviews",
   "site_settings",
   "treatment_plans",
-  "users",
   "working_hours",
   "patient_files",
   "appointment_slot_overrides"
@@ -52,7 +51,7 @@ function sqlValue(v) {
 
 await db.pool.query("SET TIME ZONE 'Europe/Istanbul'");
 
-let output = `PRAGMA foreign_keys = OFF;\n\n`;
+let output = `PRAGMA defer_foreign_keys = ON;\n\n`;
 
 for (const table of tables) {
   let rows;
@@ -86,18 +85,18 @@ for (const table of tables) {
   }
 }
 
-output += `\nPRAGMA foreign_keys = ON;\n`;
+output += `\nPRAGMA defer_foreign_keys = OFF;\n`;
 
-fs.mkdirSync("cloudflare", { recursive: true });
+fs.mkdirSync("work", { recursive: true });
 fs.writeFileSync(
-  "cloudflare/d1-data-import.sql",
+  "work/d1-data-import.sql",
   output,
   "utf8"
 );
 
 console.log("");
 console.log("EXPORT COMPLETE");
-console.log("Created: cloudflare/d1-data-import.sql");
+console.log("Created: work/d1-data-import.sql");
 
 await db.pool.end();
 

@@ -1,563 +1,496 @@
-﻿const SERVICES = [
- [1,"root-canal","حشو العصب","Kanal Tedavisi","Root Canal",4],
- [2,"cleaning","تنظيف الأسنان","Diş Taşı Temizliği","Dental Cleaning",1],
- [3,"whitening","تبييض الأسنان","Diş Beyazlatma","Whitening",3],
- [4,"implants","زراعة الأسنان","İmplant","Dental Implants",0],
- [5,"pediatric","طب أسنان الأطفال","Çocuk Diş Hekimliği","Pediatric Dentistry",5],
- [6,"orthodontics","تقويم الأسنان","Ortodonti","Orthodontics",2]
-];
-
-async function seed(env){
-  const q=env.dr_wael_clinic_db;
-
-  for(const s of SERVICES){
-    await q.prepare(`
-      INSERT OR IGNORE INTO services
-      (id,slug,title_ar,title_tr,title_en,
-       description_ar,description_tr,description_en,
-       image,duration,sessions,price,sort_order,active)
-      VALUES(?,?,?,?,?,?,?,?,?,30,1,NULL,?,1)
-    `).bind(
-      s[0],s[1],s[2],s[3],s[4],
-      s[2],s[3],s[4],
-      '/static/service-3d/'+s[1]+'.webp',
-      s[5]
-    ).run();
-  }
-
-  for(let d=0;d<7;d++){
-    await q.prepare(`
-      INSERT OR IGNORE INTO working_hours
-      (weekday,enabled,start_time,end_time,break_start,break_end)
-      VALUES(?,?,?,?,?,?)
-    `).bind(
-      d,d===6?0:1,"09:00","17:00","13:00","14:00"
-    ).run();
-  }
-}
-
-const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({
- "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-}[c]));
-
-function locale(url){
- const l=url.searchParams.get("lang")||"ar";
- return ["ar","tr","en"].includes(l)?l:"ar";
-}
-
-function page(title,body,l,extra=""){
- return `<!doctype html>
-<html lang="${l}" dir="${l==="ar"?"rtl":"ltr"}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Alexandria:wght@400;500;600;700;800&family=Tajawal:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
-${extra}
-</head>
-<body>${body}</body>
-</html>`;
-}
-
-function timeToMin(t){
- const [h,m]=String(t).slice(0,5).split(":").map(Number);
- return h*60+m;
-}
-
-function minToTime(n){
- return String(Math.floor(n/60)).padStart(2,"0")+":"+
-        String(n%60).padStart(2,"0");
-}
-
-function weekday(day){
- const x=new Date(day+"T12:00:00Z").getUTCDay();
- return (x+6)%7;
-}
-
-async function slots(env,day,service){
- const db=env.dr_wael_clinic_db;
-
- if(!/^\d{4}-\d{2}-\d{2}$/.test(day)) return [];
-
- const blocked=await db.prepare(
-   "SELECT id FROM blocked_dates WHERE day=?"
- ).bind(day).first();
-
- if(blocked) return [];
-
- const svc=await db.prepare(
-   "SELECT * FROM services WHERE id=? AND active=1"
- ).bind(service).first();
-
- if(!svc) return [];
-
- const wh=await db.prepare(
-   "SELECT * FROM working_hours WHERE weekday=?"
- ).bind(weekday(day)).first();
-
- if(!wh || !Number(wh.enabled)) return [];
-
- const reserved=(await db.prepare(`
-   SELECT starts_at
-   FROM appointments
-   WHERE substr(starts_at,1,10)=?
-   AND status <> 'cancelled'
- `).bind(day).all()).results||[];
-
- const used=new Set(
-   reserved.map(x=>String(x.starts_at).slice(11,16))
- );
-
- const result=[];
- const start=timeToMin(wh.start_time);
- const end=timeToMin(wh.end_time);
- const bs=timeToMin(wh.break_start);
- const be=timeToMin(wh.break_end);
-
- for(let x=start;x<end;x+=Number(svc.duration||30)){
-   if(x>=bs && x<be) continue;
-
-   const t=minToTime(x);
-
-   if(!used.has(t))
-     result.push(t);
- }
-
- return result;
-}
-
-async function home(env,l){
- const db=env.dr_wael_clinic_db;
-
- const services=(await db.prepare(`
-   SELECT * FROM services
-   WHERE active=1
-   ORDER BY sort_order,id
- `).all()).results||[];
-
- const cards=services.map(s=>{
-   const title=s["title_"+l]||s.title_en;
-
-   return `
-   <article class="service-card">
-    <a class="service-image"
-       href="/booking?lang=${l}&service=${s.id}">
-     <img src="${esc(s.image)}" alt="${esc(title)}">
-    </a>
-    <div>
-     <h3>${esc(title)}</h3>
-     <a class="more"
-        href="/booking?lang=${l}&service=${s.id}">
-      ${l==="ar"?"احجز الآن":l==="tr"?"Randevu al":"Book now"}
-     </a>
-    </div>
-   </article>`;
- }).join("");
-
- const title=l==="ar"
- ? 'ابتسامة <em>صحية</em> ..<strong>لحياة أجمل</strong>'
- :l==="tr"
- ? 'Sağlıklı bir gülüş<strong>Daha güzel bir hayat</strong>'
- : 'A healthier smile<strong>For a better life</strong>';
-
- return page("Dr. Wael Al-Bash",`
- <div class="premium-site">
-
- <header class="site-header">
-  <div class="header-shell">
-   <a class="brand" href="/?lang=${l}">
-    <span class="brand-copy">
-     <b>${l==="ar"?"د. وائل الباش":"Dr. Wael Al-Bash"}</b>
-     <small>${l==="tr"?"Diş Hekimliği":l==="ar"?"طب وجراحة الفم والأسنان":"Dentistry"}</small>
-    </span>
-   </a>
-
-   <div class="header-actions">
-    <div class="lang-switch">
-     <a href="/?lang=ar">عربي</a>
-     <a href="/?lang=tr">TR</a>
-     <a href="/?lang=en">EN</a>
-    </div>
-
-    <a class="btn btn-primary header-book"
-       href="/booking?lang=${l}">
-     ${l==="ar"?"احجز موعد":l==="tr"?"Randevu Al":"Book Appointment"}
-    </a>
-   </div>
-  </div>
- </header>
-
- <main>
- <section class="hero">
-
-  <div class="hero-doctor">
-   <div class="doctor-backdrop"></div>
-   <img src="/static/uploads/doctor/wael-doctor-cutout-v6.png">
-  </div>
-
-  <div class="hero-copy">
-   <div class="kicker">
-    DR. WAEL AL-BASH · MODERN DENTISTRY
-   </div>
-
-   <div class="hero-3d">
-    <div class="tooth-glow"></div>
-    <img src="/static/service-3d/hero-tooth.webp">
-   </div>
-
-   <h1>${title}</h1>
-
-   <p>${
-    l==="ar"
-    ?"رعاية أسنان حديثة ومريحة مبنية على الجودة والثقة."
-    :l==="tr"
-    ?"Kalite ve güven odaklı modern diş hekimliği."
-    :"Modern dentistry built around quality and trust."
-   }</p>
-
-   <a class="btn btn-primary"
-      href="/booking?lang=${l}">
-    ${l==="ar"?"احجز موعد":l==="tr"?"Randevu Al":"Book Appointment"}
-   </a>
-  </div>
-
- </section>
-
- <section class="services section">
-  <div class="section-heading">
-   <span>SERVICES</span>
-   <h2>${
-    l==="ar"
-    ?"رعاية متكاملة لابتسامتك"
-    :l==="tr"
-    ?"Gülüşünüz için kapsamlı bakım"
-    :"Complete care for your smile"
-   }</h2>
-  </div>
-
-  <div class="service-grid">${cards}</div>
- </section>
- </main>
-
- </div>`,l,
- '<link rel="stylesheet" href="/static/home-v8.css?v=17">');
-}
-
-async function booking(env,l,url){
- const db=env.dr_wael_clinic_db;
-
- const services=(await db.prepare(`
-   SELECT * FROM services
-   WHERE active=1
-   ORDER BY sort_order,id
- `).all()).results||[];
-
- const selected=url.searchParams.get("service")||"";
-
- const options=services.map(s=>
-   `<option value="${s.id}" ${String(s.id)===selected?"selected":""}>
-    ${esc(s["title_"+l]||s.title_en)}
-   </option>`
- ).join("");
-
- return page("Booking",`
- <div class="booking-page">
-
- <header class="booking-header">
-  <a class="booking-brand" href="/?lang=${l}">
-   <span>
-    <b>${l==="ar"?"د. وائل الباش":"Dr. Wael Al-Bash"}</b>
-   </span>
-  </a>
-
-  <div class="booking-lang">
-   <a href="/booking?lang=ar">عربي</a>
-   <a href="/booking?lang=tr">TR</a>
-   <a href="/booking?lang=en">EN</a>
-  </div>
- </header>
-
- <main class="booking-layout">
-
- <aside class="booking-intro">
-  <span class="eyebrow">APPOINTMENT</span>
-  <h1>${l==="ar"?"احجز موعد":l==="tr"?"Randevu Al":"Book Appointment"}</h1>
-  <div class="booking-visual">
-   <img src="/static/service-3d/hero-tooth.webp">
-  </div>
- </aside>
-
- <section class="booking-panel">
-
- <form id="bookingForm" class="booking-form">
-
-  <label>
-   <span>${l==="ar"?"الخدمة":l==="tr"?"Hizmet":"Service"}</span>
-   <select id="service" required>
-    <option value="">—</option>
-    ${options}
-   </select>
-  </label>
-
-  <button type="button"
-          id="nearest"
-          class="nearest-slot">
-   ${l==="ar"?"أقرب موعد متاح":l==="tr"?"İlk uygun randevu":"Next available"}
-  </button>
-
-  <label>
-   <span>${l==="ar"?"التاريخ":l==="tr"?"Tarih":"Date"}</span>
-   <input id="day" type="date" required>
-  </label>
-
-  <div class="slot-field">
-   <span>${l==="ar"?"الوقت":l==="tr"?"Saat":"Time"}</span>
-   <div id="slots" class="slots"></div>
-   <input id="time" type="hidden" required>
-  </div>
-
-  <div class="two">
-   <label>
-    <span>${l==="ar"?"الاسم الكامل":l==="tr"?"Ad Soyad":"Full name"}</span>
-    <input id="name" required>
-   </label>
-
-   <label>
-    <span>${l==="ar"?"الهاتف":l==="tr"?"Telefon":"Phone"}</span>
-    <input id="phone" required>
-   </label>
-  </div>
-
-  <div class="two">
-   <label>
-    <span>${l==="ar"?"رقم الهوية":l==="tr"?"T.C. Kimlik No / Yabancı Kimlik No":"ID No"}</span>
-    <input id="identity_no"
-           maxlength="11"
-           pattern="[0-9]{11}"
-           required>
-   </label>
-
-   <label>
-    <span>${l==="ar"?"تاريخ الميلاد":l==="tr"?"Doğum Tarihi":"Birth date"}</span>
-    <input id="birth_date"
-           type="date"
-           required>
-   </label>
-  </div>
-
-  <label>
-   <span>${l==="ar"?"ملاحظات":l==="tr"?"Notlar":"Notes"}</span>
-   <textarea id="notes"></textarea>
-  </label>
-
-  <div id="bookingSummary"
-       class="booking-summary"
-       hidden></div>
-
-  <button class="submit-booking"
-          type="submit">
-   ${l==="ar"?"إرسال طلب الحجز":l==="tr"?"Randevu isteği gönder":"Send booking request"}
-  </button>
-
-  <div id="msg" class="form-msg"></div>
-
- </form>
-
- </section>
- </main>
- </div>
-
- <script>window.WAEL_LOCALE="${l}"</script>
- <script src="/static/booking-v8.js?v=3" defer></script>
- `,l,
- '<link rel="stylesheet" href="/static/booking-v8.css?v=2">');
-}
-
-async function createBooking(env,p){
- const db=env.dr_wael_clinic_db;
-
- const available=await slots(
-   env,
-   String(p.day||""),
-   Number(p.service_id)
- );
-
- if(!available.includes(String(p.time||"")))
-   return Response.json(
-     {detail:"slot_unavailable"},
-     {status:409}
-   );
-
- const identity=String(p.identity_no||"").trim();
-
- if(!/^\d{11}$/.test(identity))
-   return Response.json(
-     {detail:"invalid_data"},
-     {status:422}
-   );
-
- let patient=await db.prepare(
-   "SELECT id FROM patients WHERE identity_no=?"
- ).bind(identity).first();
-
- const now=new Date().toISOString()
-   .replace("T"," ")
-   .slice(0,19);
-
- let patientId;
-
- if(patient){
-   patientId=patient.id;
- }else{
-   const r=await db.prepare(`
-     INSERT INTO patients
-     (name,phone,email,identity_no,birth_date,created_at)
-     VALUES(?,?,'',?,?,?)
-   `).bind(
-     String(p.name||""),
-     String(p.phone||""),
-     identity,
-     String(p.birth_date||""),
-     now
-   ).run();
-
-   patientId=r.meta.last_row_id;
- }
-
- try{
-   const r=await db.prepare(`
-     INSERT INTO appointments
-     (patient_id,service_id,starts_at,slot_key,status,notes,locale,created_at)
-     VALUES(?,?,?,?,?,?,?,?)
-   `).bind(
-     patientId,
-     Number(p.service_id),
-     `${p.day} ${p.time}:00`,
-     `${p.day}T${p.time}`,
-     "pending",
-     String(p.notes||""),
-     String(p.locale||"ar"),
-     now
-   ).run();
-
-   return Response.json({
-     ok:true,
-     id:r.meta.last_row_id
-   });
-
- }catch(e){
-   return Response.json(
-     {detail:"slot_unavailable"},
-     {status:409}
-   );
- }
-}
-
-export default {
- async fetch(request,env){
-  const url=new URL(request.url);
-  const path=url.pathname;
-
-  try{
-   if(path.startsWith("/static/"))
-     return env.ASSETS.fetch(request);
-
-   await seed(env);
-
-   const l=locale(url);
-
-   if(request.method==="GET" && path==="/")
-     return new Response(
-       await home(env,l),
-       {headers:{"content-type":"text/html;charset=utf-8"}}
-     );
-
-   if(request.method==="GET" && path==="/booking")
-     return new Response(
-       await booking(env,l,url),
-       {headers:{"content-type":"text/html;charset=utf-8"}}
-     );
-
-   if(request.method==="GET" &&
-      path==="/api/availability")
-     return Response.json({
-       slots:await slots(
-         env,
-         url.searchParams.get("day"),
-         Number(url.searchParams.get("service_id"))
-       )
-     });
-
-   if(request.method==="GET" &&
-      path==="/api/availability/nearest"){
-
-     const sid=Number(
-       url.searchParams.get("service_id")
-     );
-
-     const today=new Date();
-
-     for(let i=0;i<30;i++){
-       const d=new Date(today);
-       d.setDate(d.getDate()+i);
-
-       const day=
-         d.getFullYear()+"-"+
-         String(d.getMonth()+1).padStart(2,"0")+"-"+
-         String(d.getDate()).padStart(2,"0");
-
-       const s=await slots(env,day,sid);
-
-       if(s.length)
-         return Response.json({
-           day,
-           time:s[0]
-         });
-     }
-
-     return Response.json({
-       day:null,
-       time:null
-     });
-   }
-
-   if(request.method==="POST" &&
-      path==="/api/bookings")
-     return createBooking(
-       env,
-       await request.json()
-     );
-
-   const m=path.match(
-     /^\/booking\/confirmation\/(\d+)$/
-   );
-
-   if(m){
-     return new Response(
-       page("Appointment",`
-        <main class="center">
-         <div class="confirm card">
-          <div class="check">✓</div>
-          <h1>تم استلام طلب الموعد</h1>
-          <p>رقم الطلب #${m[1]}</p>
-          <a class="btn" href="/">العودة للرئيسية</a>
-         </div>
-        </main>
-       `,l),
-       {headers:{"content-type":"text/html;charset=utf-8"}}
-     );
-   }
-
-   return env.ASSETS.fetch(request);
-
-  }catch(e){
-   return new Response(
-     "Worker error: "+e.message,
-     {status:500}
-   );
-  }
- }
+import nunjucks from 'nunjucks/browser/nunjucks-slim.js';
+import templates from './cloudflare/templates.mjs';
+import {createHmac,randomBytes,timingSafeEqual,randomUUID,pbkdf2} from 'node:crypto';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {pool,storage} from './cloudflare/adapters.mjs';
+const context=new AsyncLocalStorage();
+const runtime=()=>context.getStore();
+const env=new nunjucks.Environment(new nunjucks.PrecompiledLoader(templates),{autoescape:true});
+nunjucks.installJinjaCompat();
+env.addFilter('prefix',(v,n)=>(v||'').slice(0,n));
+const db={pool:pool(runtime)};
+const MAX_UPLOAD = 10 * 1024 * 1024;
+const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf", "video/mp4"]);
+const BLOCKING_STATUSES = new Set(["pending", "confirmed", "rescheduled", "completed", "no_show"]);
+
+const I18N = {
+  ar: {dir:"rtl",home:"\u0627\u0644\u0631\u0626\u064a\u0633\u064a\u0629",about:"\u0639\u0646 \u0627\u0644\u0637\u0628\u064a\u0628",services:"\u0627\u0644\u062e\u062f\u0645\u0627\u062a",cases:"\u0627\u0644\u062d\u0627\u0644\u0627\u062a",reviews:"\u0622\u0631\u0627\u0621 \u0627\u0644\u0645\u0631\u0636\u0649",articles:"\u0627\u0644\u0645\u0642\u0627\u0644\u0627\u062a",faq:"\u0627\u0644\u0623\u0633\u0626\u0644\u0629 \u0627\u0644\u0634\u0627\u0626\u0639\u0629",contact:"\u062a\u0648\u0627\u0635\u0644 \u0645\u0639\u0646\u0627",book:"\u0627\u062d\u062c\u0632 \u0645\u0648\u0639\u062f",whatsapp:"\u062a\u0648\u0627\u0635\u0644 \u0639\u0628\u0631 \u0648\u0627\u062a\u0633\u0627\u0628",hero:"\u0627\u0628\u062a\u0633\u0627\u0645\u0629 \u0635\u062d\u064a\u0629 .. \u0644\u062d\u064a\u0627\u0629 \u0623\u062c\u0645\u0644",sub:"\u0631\u0639\u0627\u064a\u0629 \u0623\u0633\u0646\u0627\u0646 \u062d\u062f\u064a\u062b\u0629 \u0648\u0645\u0631\u064a\u062d\u0629 \u0645\u0628\u0646\u064a\u0629 \u0639\u0644\u0649 \u0627\u0644\u062c\u0648\u062f\u0629 \u0648\u0627\u0644\u062b\u0642\u0629.",choose:"\u0627\u062e\u062a\u0631 \u0627\u0644\u062e\u062f\u0645\u0629",date:"\u0627\u062e\u062a\u0631 \u0627\u0644\u062a\u0627\u0631\u064a\u062e",time:"\u0627\u0644\u0648\u0642\u062a \u0627\u0644\u0645\u062a\u0627\u062d",name:"\u0627\u0644\u0627\u0633\u0645 \u0627\u0644\u0643\u0627\u0645\u0644",phone:"\u0627\u0644\u0647\u0627\u062a\u0641",email:"\u0627\u0644\u0628\u0631\u064a\u062f \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a",notes:"\u0645\u0644\u0627\u062d\u0638\u0627\u062a",submit:"\u0625\u0631\u0633\u0627\u0644 \u0637\u0644\u0628 \u0627\u0644\u062d\u062c\u0632"},
+  tr: {dir:"ltr",home:"Ana Sayfa",about:"Hakk\u0131nda",services:"Hizmetler",cases:"Vakalar",reviews:"Yorumlar",articles:"Makaleler",faq:"SSS",contact:"\u0130leti\u015fim",book:"Randevu Al",whatsapp:"WhatsApp",hero:"Sa\u011fl\u0131kl\u0131 g\u00fcl\u00fc\u015f, daha g\u00fczel bir hayat",sub:"Kalite ve g\u00fcven odakl\u0131 modern, konforlu di\u015f hekimli\u011fi.",choose:"Hizmet se\u00e7in",date:"Tarih se\u00e7in",time:"Uygun saat",name:"Ad Soyad",phone:"Telefon",email:"E-posta",notes:"Notlar",submit:"Randevu iste\u011fi g\u00f6nder"},
+  en: {dir:"ltr",home:"Home",about:"About",services:"Services",cases:"Cases",reviews:"Reviews",articles:"Articles",faq:"FAQ",contact:"Contact",book:"Book Appointment",whatsapp:"WhatsApp",hero:"A healthy smile for a better life",sub:"Modern, comfortable dentistry built around quality and trust.",choose:"Choose service",date:"Choose date",time:"Available time",name:"Full name",phone:"Phone",email:"Email",notes:"Notes",submit:"Send booking request"}
 };
+
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Content-Security-Policy": "default-src 'self'; img-src 'self' data: https://*.openstreetmap.org; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src https://www.youtube.com https://player.vimeo.com; frame-ancestors 'none'"
+};
+
+function withSecurity(response) {
+  const h = new Headers(response.headers);
+  for (const [k,v] of Object.entries(SECURITY_HEADERS)) h.set(k,v);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers: h });
+}
+function html(body, status=200, extra={}) {
+  return withSecurity(new Response(body, { status, headers: {"content-type":"text/html; charset=utf-8", ...extra} }));
+}
+function json(data, status=200) {
+  return withSecurity(Response.json(data, {status}));
+}
+function redirect(location, status=303, extra={}) {
+  return withSecurity(new Response(null, {status, headers:{Location:location, ...extra}}));
+}
+function parseCookies(req) {
+  const out = {};
+  const raw = req.headers.get("cookie") || "";
+  for (const p of raw.split(";")) {
+    const i = p.indexOf("="); if (i < 0) continue;
+    out[p.slice(0,i).trim()] = decodeURIComponent(p.slice(i+1).trim());
+  }
+  return out;
+}
+function lang(req, url) {
+  const x = url.searchParams.get("lang") || parseCookies(req).lang || "ar";
+  return I18N[x] ? x : "ar";
+}
+function cookie(name, value, opts={}) {
+  let s = `${name}=${encodeURIComponent(value)}; Path=/`;
+  if (opts.maxAge) s += `; Max-Age=${opts.maxAge}`;
+  if (opts.httpOnly) s += "; HttpOnly";
+  if (opts.sameSite) s += `; SameSite=${opts.sameSite}`;
+  if (opts.secure) s += "; Secure";
+  if (opts.expires) s += `; Expires=${opts.expires.toUTCString()}`;
+  return s;
+}
+function signSession(uid) {
+  const exp = Math.floor(Date.now()/1000) + 43200;
+  const payload = `${uid}.${exp}`;
+  const sig = createHmac("sha256", runtime().APP_SECRET).update(payload).digest("base64url");
+  return `${payload}.${sig}`;
+}
+function verifySession(token) {
+  try {
+    const [uid, exp, sig] = token.split(".");
+    if (!uid || !exp || !sig || Number(exp) < Math.floor(Date.now()/1000)) return null;
+    const expected = createHmac("sha256", runtime().APP_SECRET).update(`${uid}.${exp}`).digest("base64url");
+    const a=Buffer.from(sig), b=Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a,b)) return null;
+    return Number(uid);
+  } catch { return null; }
+}
+const derive=(p,salt)=>new Promise((resolve,reject)=>pbkdf2(p,salt,100000,32,'sha256',(e,k)=>e?reject(e):resolve(k)));
+async function hashPassword(p){const salt=randomBytes(16);return ['pbkdf2',salt.toString('hex'),(await derive(p,salt)).toString('hex')].join('$');}
+async function verifyPassword(p,encoded){try{const [kind,salt,key]=encoded.split('$');if(kind!=='pbkdf2')return false;const expected=Buffer.from(key,'hex'),actual=await derive(p,Buffer.from(salt,'hex'));return expected.length===actual.length&&timingSafeEqual(expected,actual);}catch{return false;}}
+function formatDate(value, fmt="%Y-%m-%d %H:%M") {
+  if (!value) return "";
+  const raw=value instanceof Date ? value.toISOString() : String(value);
+  const text=raw.replace("T"," ");
+  return fmt === "%Y-%m-%d" ? text.slice(0,10) : text.slice(0,16);
+
+}
+function dateProxy(value){ return { strftime:(fmt)=>formatDate(value,fmt), raw:value }; }
+function localNow() {
+  const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Istanbul",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,weekday:"short"}).formatToParts(new Date());
+  return Object.fromEntries(parts.map(x=>[x.type,x.value]));
+}
+function cleanPath(url) {
+  let p=url.pathname;
+  if (!p.startsWith("/")) p="/"+p;
+  return p.replace(/\/{2,}/g,"/");
+}
+function slugify(s) {
+  const base=String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"") || "item";
+  return `${base}-${randomBytes(2).toString("hex")}`;
+}
+async function query(sql, params=[]) { return (await db.pool.query(sql, params)).rows; }
+async function one(sql, params=[]) { return (await query(sql,params))[0] || null; }
+async function settingsDict() {
+  const rows=await query('SELECT "key", value FROM site_settings');
+  return Object.fromEntries(rows.map(r=>[r.key,r.value]));
+}
+function invalid(detail="invalid_data",status=422){return Object.assign(new Error(detail),{status});}
+function validCost(value){if(!String(value||"").trim())return null;const n=Number(value);if(!Number.isFinite(n)||n<0)throw invalid("invalid cost");return n;}
+function validDay(value){if(!value)return null;if(!/^\d{4}-\d{2}-\d{2}$/.test(value)||Number.isNaN(Date.parse(value))||new Date(value).toISOString().slice(0,10)!==value)throw invalid("invalid date");return value;}
+function validIdentity(value){const v=String(value||"").trim();if(!/^\d{11}$/.test(v))throw invalid("invalid_identity");return v;}
+function validBirthDate(value){const v=validDay(String(value||""));if(!v)throw invalid("birth_date_required");const now=localNow(),today=`${now.year}-${now.month}-${now.day}`;if(v>today)throw invalid("invalid_birth_date");return v;}
+async function validImage(value,existing=""){
+  value=String(value||"").trim();if(!value || value===existing)return value;
+  if(!/^\/media\/[a-f0-9-]+\.(jpg|jpeg|png|webp)$/i.test(value) || !await one("SELECT id FROM media WHERE path=$1 AND mime LIKE 'image/%'",[value]))throw invalid("Choose an uploaded image");
+  return value;
+}
+async function owned(table,id,pid){
+  if(!["treatment_plans","patient_files"].includes(table))throw invalid();
+  const row=await one(`SELECT * FROM ${table} WHERE id=$1 AND patient_id=$2`,[id,pid]);if(!row)throw invalid("not_found",404);return row;
+}
+function mediaStore(){return storage(runtime(),"media");}
+function patientStore(){return storage(runtime(),"private");}
+async function uploadData(file,privateFile=false){
+  if(!file || typeof file.arrayBuffer!=="function")throw invalid("file required");
+  if(!ALLOWED_MIME.has(file.type)||(privateFile&&file.type==="video/mp4"))throw invalid("unsupported file",415);
+  if(!file.size||file.size>MAX_UPLOAD)throw invalid("file too large or empty",413);
+  return file.arrayBuffer();
+}
+async function currentUser(req) {
+  const uid=verifySession(parseCookies(req).wael_session || "");
+  if (!uid) return null;
+  return one("SELECT * FROM users WHERE id=$1 AND active=TRUE",[uid]);
+}
+async function requireAdmin(req) {
+  const u=await currentUser(req);
+  if (!u || !["admin","doctor","assistant","receptionist"].includes(u.role)) return null;
+  return u;
+}
+function serviceView(x,l){return {id:x.id,slug:x.slug,title:x[`title_${l}`],description:x[`description_${l}`],sessions:x.sessions,price:x.price,image:x.image};}
+function apptView(r){return {...r,starts_at:dateProxy(r.starts_at),patient:{id:r.patient_id,name:r.patient_name,phone:r.patient_phone,email:r.patient_email},service:{id:r.service_id,title_ar:r.service_title_ar,title_en:r.service_title_en,slug:r.service_slug}};}
+function noteView(r){return {...r,created_at:dateProxy(r.created_at)};}
+function render(name, ctx={}) { return env.render(name,ctx); }
+function isPhone(v){return /^[+0-9 ()-]{7,25}$/.test(String(v||""));}
+function minutes(t){ const [h,m]=String(t||"00:00").slice(0,5).split(":").map(Number); return h*60+m; }
+function hhmm(total){ return `${String(Math.floor(total/60)).padStart(2,"0")}:${String(total%60).padStart(2,"0")}`; }
+function slotKey(day,t){ return `${day.replaceAll("-","")}${String(t).replace(":","")}`; }
+function weekdayPython(day){ const d=new Date(`${day}T12:00:00Z`); return (d.getUTCDay()+6)%7; }
+
+async function availableSlots(day, serviceId, executor=db.pool, excludeId=0) {
+  const one=async(sql,params)=>(await executor.query(sql,params)).rows[0];
+  const query=async(sql,params)=>(await executor.query(sql,params)).rows;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return [];
+  const now=localNow(), today=`${now.year}-${now.month}-${now.day}`;
+  if (day < today) return [];
+  if (await one("SELECT id FROM blocked_dates WHERE day=$1",[day])) return [];
+  const [wh,svc,overrides,reservedRows]=await Promise.all([
+    one("SELECT * FROM working_hours WHERE weekday=$1",[weekdayPython(day)]),
+    one("SELECT * FROM services WHERE id=$1 AND active=TRUE",[serviceId]),
+    query("SELECT slot_time,is_open FROM appointment_slot_overrides WHERE day=$1 ORDER BY slot_time",[day]),
+    query("SELECT a.starts_at,s.duration FROM appointments a JOIN services s ON s.id=a.service_id WHERE a.slot_key IS NOT NULL AND date(a.starts_at)=date($1) AND a.id<>$2",[day,excludeId])
+  ]);
+  if (!svc) return [];
+  const step=Math.max(10,Number(svc.duration||30)), candidates=new Set();
+  if(wh?.enabled){
+    const start=minutes(wh.start_time), end=minutes(wh.end_time);
+    const bs=wh.break_start ? minutes(wh.break_start):null, be=wh.break_end?minutes(wh.break_end):null;
+    for(let cur=start; cur+step<=end; cur+=step){
+      const t=hhmm(cur), inBreak=bs!==null&&be!==null&&cur<be&&cur+step>bs;
+      if(!inBreak)candidates.add(t);
+    }
+  }
+  for(const o of overrides){
+    const t=String(o.slot_time||"").slice(0,5);
+    if(!/^\d{2}:\d{2}$/.test(t))continue;
+    if(o.is_open)candidates.add(t); else candidates.delete(t);
+  }
+  const nowMin=Number(now.hour)*60+Number(now.minute)+30;
+  return [...candidates].sort().filter(t=>{
+    const cur=minutes(t);
+    if(day===today && cur<=nowMin)return false;
+    return !reservedRows.some(a=>{const at=minutes(formatDate(a.starts_at).slice(11));return cur<at+Math.max(10,a.duration)&&cur+step>at;});
+  });
+}
+async function audit(action, entity, entityId="", detail="", actor="system") {
+  await db.pool.query("INSERT INTO audit_logs(actor,action,entity,entity_id,detail,created_at) VALUES($1,$2,$3,$4,$5,datetime('now'))",[actor,action,entity,String(entityId),detail]);
+}
+async function sendEmail(to, subject, htmlBody) {
+  if(!to) return;
+  const api=runtime().RESEND_API_KEY || "";
+  if(!api){ await db.pool.query("INSERT INTO email_logs(recipient,subject,status,provider_id,error,created_at) VALUES($1,$2,'configuration_required','',$3,datetime('now'))",[to,subject,"RESEND_API_KEY missing"]); return; }
+  try{
+    const r=await fetch("https://api.resend.com/emails",{method:"POST",headers:{Authorization:`Bearer ${api}`,"Content-Type":"application/json"},body:JSON.stringify({from:runtime().EMAIL_FROM||"Appointments <onboarding@resend.dev>",to:[to],subject,html:htmlBody})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) throw new Error(d.message||`HTTP ${r.status}`);
+    await db.pool.query("INSERT INTO email_logs(recipient,subject,status,provider_id,error,created_at) VALUES($1,$2,'sent',$3,'',datetime('now'))",[to,subject,d.id||""]);
+  }catch(e){ await db.pool.query("INSERT INTO email_logs(recipient,subject,status,provider_id,error,created_at) VALUES($1,$2,'failed','',$3,datetime('now'))",[to,subject,String(e).slice(0,500)]); }
+}
+function emailText(locale,status,appt){
+  const dicts={ar:{pending:"\u062a\u0645 \u0627\u0633\u062a\u0644\u0627\u0645 \u0637\u0644\u0628 \u0645\u0648\u0639\u062f\u0643",confirmed:"\u062a\u0645 \u062a\u0623\u0643\u064a\u062f \u0645\u0648\u0639\u062f\u0643",rejected:"\u062a\u0639\u0630\u0631 \u0642\u0628\u0648\u0644 \u0627\u0644\u0645\u0648\u0639\u062f",cancelled:"\u062a\u0645 \u0625\u0644\u063a\u0627\u0621 \u0627\u0644\u0645\u0648\u0639\u062f",rescheduled:"\u062a\u0645 \u062a\u0639\u062f\u064a\u0644 \u0645\u0648\u0639\u062f\u0643"},tr:{pending:"Randevu talebiniz al\u0131nd\u0131",confirmed:"Randevunuz onayland\u0131",rejected:"Randevu talebi kabul edilemedi",cancelled:"Randevunuz iptal edildi",rescheduled:"Randevunuz g\u00fcncellendi"},en:{pending:"Booking request received",confirmed:"Appointment confirmed",rejected:"Appointment request declined",cancelled:"Appointment cancelled",rescheduled:"Appointment rescheduled"}};
+  const l=dicts[locale]?locale:"ar", subj=dicts[l][status]||"Appointment update";
+  const body=`<h2>${subj}</h2><p>${formatDate(appt.starts_at)}</p><p>${appt.service_title_en||""}</p><p><a href="${(runtime().BASE_URL || 'http://localhost:8787')}/booking?lang=${l}">Book another appointment</a></p>`;
+  return [subj,body];
+}
+
+
+async function ensureBootstrap(){
+  if(!runtime().APP_SECRET || runtime().APP_SECRET.length<32 || !runtime().ADMIN_EMAIL || !runtime().ADMIN_PASSWORD) throw Object.assign(new Error("Missing admin secrets"),{status:503});
+
+  const u=await one("SELECT id FROM users LIMIT 1");
+  if(!u){ await db.pool.query("INSERT INTO users(email,password_hash,role,active,created_at) VALUES($1,$2,'admin',TRUE,datetime('now')) ON CONFLICT(email) DO NOTHING",[runtime().ADMIN_EMAIL.toLowerCase(),await hashPassword(runtime().ADMIN_PASSWORD)]); }
+
+}
+
+async function handle(req) {
+  await ensureBootstrap();
+  const url=new URL(req.url), path=cleanPath(url), method=req.method.toUpperCase();
+  if(method!=="GET" && method!=="HEAD" && path.startsWith("/admin") && req.headers.get("origin") && req.headers.get("origin")!==url.origin) return json({detail:"invalid_origin"},403);
+
+  if(method==="GET" && path==="/"){
+    const l=lang(req,url);
+    const [services,cases,arts,reviews,faqs,settings]=await Promise.all([
+      query("SELECT * FROM services WHERE active=TRUE ORDER BY sort_order,id"),
+      query("SELECT * FROM clinical_cases WHERE status='published' ORDER BY id DESC LIMIT 6"),
+      query("SELECT * FROM articles WHERE published=TRUE ORDER BY id DESC LIMIT 3"),
+      query("SELECT * FROM reviews WHERE published=TRUE ORDER BY id DESC LIMIT 6"),
+      query("SELECT * FROM faq WHERE published=TRUE ORDER BY sort_order,id"),settingsDict()
+    ]);
+    for(const r of reviews) r.stars="\u2605".repeat(Math.max(0,Math.min(5,Number(r.rating||0))));
+    const body=render("home.html",{l,t:I18N[l],services:services.map(x=>serviceView(x,l)),cases,settings,articles:arts,reviews,faqs});
+    return html(body,200,{"Set-Cookie":cookie("lang",l,{maxAge:31536000,sameSite:"Lax"})});
+  }
+
+  if(method==="GET" && path==="/booking"){
+    const l=lang(req,url), [services,settings]=await Promise.all([query("SELECT * FROM services WHERE active=TRUE ORDER BY sort_order,id"),settingsDict()]);
+    const selected_service_id=Number(url.searchParams.get("service")||0);
+    return html(render("booking.html",{l,t:I18N[l],services:services.map(x=>serviceView(x,l)),settings,selected_service_id,request:{query_params:{get:(key)=>url.searchParams.get(key)}}}),200,{"Set-Cookie":cookie("lang",l,{maxAge:31536000,sameSite:"Lax"})});
+  }
+
+  if(method==="GET" && path==="/api/availability"){
+    const day=url.searchParams.get("day")||"", serviceId=Number(url.searchParams.get("service_id")||0);
+    return json({slots:await availableSlots(day,serviceId)});
+  }
+
+  if(method==="GET" && path==="/api/availability/nearest"){
+    const serviceId=Number(url.searchParams.get("service_id"));
+    if(!await one("SELECT id FROM services WHERE id=$1 AND active=TRUE",[serviceId])) return json({detail:"service"},404);
+    const now=localNow(), start=new Date(`${now.year}-${now.month}-${now.day}T12:00:00Z`);
+    for(let i=0;i<30;i++){ const day=new Date(start.getTime()+i*86400000).toISOString().slice(0,10); const slots=await availableSlots(day,serviceId); if(slots.length) return json({day,time:slots[0]}); }
+    return json({day:null,time:null});
+  }
+
+  if(method==="POST" && path==="/api/bookings"){
+    let p; try{p=await req.json();}catch{return json({detail:"invalid_json"},422);}
+    const serviceId=Number(p.service_id), day=String(p.day||""), tm=String(p.time||""), name=String(p.name||"").trim(), phone=String(p.phone||"").trim(), notes=String(p.notes||""), locale=I18N[p.locale]?p.locale:"ar";
+    let identityNo,birthDate; try{identityNo=validIdentity(p.identity_no);birthDate=validBirthDate(p.birth_date);}catch(e){return json({detail:e.message||"invalid_data"},422);}
+    if(name.length<2 || !isPhone(phone) || !/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{2}:\d{2}$/.test(tm)) return json({detail:"invalid_data"},422);
+    const svc=await one("SELECT * FROM services WHERE id=$1 AND active=TRUE",[serviceId]); if(!svc) return json({detail:"service"},404);
+    const slots=await availableSlots(day,serviceId); if(!slots.includes(tm)) return json({detail:"slot_unavailable"},409);
+    const starts=day+' '+tm+':00', database=runtime().dr_wael_clinic_db;
+    try{
+      const result=await database.batch([
+        database.prepare("INSERT INTO patients(name,phone,email,identity_no,birth_date,created_at) VALUES(?,?,'',?,?,datetime('now')) ON CONFLICT(identity_no) WHERE identity_no IS NOT NULL AND identity_no <> '' DO UPDATE SET name=excluded.name,phone=excluded.phone,birth_date=excluded.birth_date").bind(name,phone,identityNo,birthDate),
+        database.prepare("INSERT INTO appointments(patient_id,service_id,starts_at,slot_key,status,notes,locale,created_at) SELECT id,?,?,?,'pending',?,?,datetime('now') FROM patients WHERE identity_no=? RETURNING *").bind(serviceId,starts,slotKey(day,tm),notes,locale,identityNo)
+      ]);
+      const appt=result[1].results[0];
+      await audit('appointment.created','appointment',appt.id,starts,'public');
+      return json({ok:true,id:appt.id,status:appt.status,starts_at:appt.starts_at});
+    }catch(error){if(/UNIQUE|slot_unavailable/i.test(error.message))return json({detail:'slot_unavailable'},409);throw error;}
+  }
+
+  let m=path.match(/^\/booking\/confirmation\/(\d+)$/);
+  if(method==="GET" && m){
+    const r=await one("SELECT a.*,s.title_ar AS service_title_ar,s.title_en AS service_title_en,s.title_tr AS service_title_tr,s.slug AS service_slug FROM appointments a JOIN services s ON s.id=a.service_id WHERE a.id=$1",[Number(m[1])]);
+    if(!r) return render404(req,url);
+    const l=lang(req,url), a={...r,starts_at:dateProxy(r.starts_at),service:{title_ar:r.service_title_ar,title_tr:r.service_title_tr,title_en:r.service_title_en,slug:r.service_slug}};
+    return html(render("confirmation.html",{a,l,t:I18N[l],settings:await settingsDict()}));
+  }
+
+  if(method==="POST" && path==="/contact"){
+    const f=await req.formData(), name=String(f.get("name")||"").trim(), email=String(f.get("email")||"").trim(), phone=String(f.get("phone")||"").trim(), body=String(f.get("body")||"").trim();
+    if(body.length<5) return html(render("error.html",{code:422,message:"تحقق من الرسالة"}),422);
+    await db.pool.query("INSERT INTO messages(name,email,phone,body,created_at) VALUES($1,$2,$3,$4,datetime('now'))",[name,email,phone,body]); return redirect("/?sent=1");
+  }
+
+  if(method==="GET" && path==="/admin/login") return html(render("login.html",{error:null,l:"ar",t:I18N.ar}));
+  if(method==="POST" && path==="/admin/login"){
+    const f=await req.formData(), email=String(f.get("email")||"").toLowerCase().trim(), password=String(f.get("password")||"");
+    const u=await one("SELECT * FROM users WHERE email=$1",[email]);
+    if(!u || !u.active || !await verifyPassword(password,u.password_hash)) return html(render("login.html",{error:"بيانات الدخول غير صحيحة",l:"ar",t:I18N.ar}),401);
+    const tok=signSession(u.id); return redirect("/admin",303,{"Set-Cookie":cookie("wael_session",tok,{maxAge:43200,httpOnly:true,sameSite:"Strict",secure:true})});
+  }
+  if(method==="POST" && path==="/admin/logout") return redirect("/admin/login",303,{"Set-Cookie":cookie("wael_session","",{httpOnly:true,sameSite:"Strict",secure:true,expires:new Date(0)})});
+
+  if(path.startsWith("/admin")){
+    const u=await requireAdmin(req); if(!u) return redirect("/admin/login",303);
+
+    if(method==="GET" && path==="/admin"){
+      const today=localNow(); const d=`${today.year}-${today.month}-${today.day}`;
+      const [statToday,statPatients,statPending,statMessages,appts0,patients,services,cases,media,messages,reviews,faqs,articles,settings,workingHours,blockedDates,slotOverrides]=await Promise.all([
+        one("SELECT COUNT(*) AS n FROM appointments WHERE date(starts_at)=date($1)",[d]),one("SELECT COUNT(*) AS n FROM patients"),one("SELECT COUNT(*) AS n FROM appointments WHERE status='pending'"),one("SELECT COUNT(*) AS n FROM messages"),
+        query("SELECT a.*,p.name patient_name,p.phone patient_phone,p.email patient_email,s.title_ar service_title_ar,s.title_en service_title_en,s.slug service_slug FROM appointments a JOIN patients p ON p.id=a.patient_id JOIN services s ON s.id=a.service_id ORDER BY a.starts_at DESC LIMIT 50"),
+        query("SELECT * FROM patients ORDER BY id DESC LIMIT 50"),query("SELECT * FROM services ORDER BY sort_order,id"),query("SELECT * FROM clinical_cases ORDER BY id DESC"),query("SELECT * FROM media ORDER BY id DESC LIMIT 50"),query("SELECT * FROM messages ORDER BY id DESC LIMIT 30"),query("SELECT * FROM reviews ORDER BY id DESC"),query("SELECT * FROM faq ORDER BY sort_order,id"),query("SELECT * FROM articles ORDER BY id DESC"),settingsDict(),
+        query("SELECT * FROM working_hours ORDER BY weekday"),query("SELECT * FROM blocked_dates ORDER BY day DESC LIMIT 60"),query("SELECT * FROM appointment_slot_overrides ORDER BY day DESC,slot_time LIMIT 120")
+      ]);
+      const wh=workingHours.map(x=>({...x,start_time:String(x.start_time).slice(0,5),end_time:String(x.end_time).slice(0,5),break_start:x.break_start?String(x.break_start).slice(0,5):"",break_end:x.break_end?String(x.break_end).slice(0,5):""}));
+      return html(render("admin.html",{u,stats:{today:statToday.n,patients:statPatients.n,pending:statPending.n,messages:statMessages.n},appts:appts0.map(apptView),patients,services,cases,media,messages,settings,reviews,faqs,articles,working_hours:wh,blocked_dates:blockedDates.map(x=>({...x,day:formatDate(x.day,"%Y-%m-%d")})),slot_overrides:slotOverrides.map(x=>({...x,day:formatDate(x.day,"%Y-%m-%d"),slot_time:String(x.slot_time).slice(0,5)}))}));
+    }
+
+    if(method==="POST" && path==="/admin/schedule/working-hours"){
+      const f=await req.formData(),weekday=Number(f.get("weekday")),enabled=!!f.get("enabled"),start=String(f.get("start_time")||""),end=String(f.get("end_time")||""),bs=String(f.get("break_start")||""),be=String(f.get("break_end")||"");
+      if(!Number.isInteger(weekday)||weekday<0||weekday>6||!/^\d{2}:\d{2}$/.test(start)||!/^\d{2}:\d{2}$/.test(end)||minutes(start)>=minutes(end)||(bs&&!/^\d{2}:\d{2}$/.test(bs))||(be&&!/^\d{2}:\d{2}$/.test(be))||((bs||be)&&(!bs||!be||minutes(bs)>=minutes(be))))throw invalid();
+      await query("INSERT INTO working_hours(weekday,enabled,start_time,end_time,break_start,break_end) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(weekday) DO UPDATE SET enabled=EXCLUDED.enabled,start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,break_start=EXCLUDED.break_start,break_end=EXCLUDED.break_end",[weekday,enabled,start,end,bs||null,be||null]);
+      await audit("schedule.working_hours_updated","schedule",weekday,`${enabled?"open":"closed"} ${start}-${end}`,u.email);return redirect("/admin#schedule");
+    }
+    if(method==="POST" && path==="/admin/schedule/block-date"){
+      const f=await req.formData(),day=validDay(String(f.get("day")||"")),reason=String(f.get("reason")||"إغلاق يدوي").trim().slice(0,200)||"إغلاق يدوي";
+      if(!day)throw invalid();await query("INSERT INTO blocked_dates(day,reason) VALUES($1,$2) ON CONFLICT(day) DO UPDATE SET reason=EXCLUDED.reason",[day,reason]);await audit("schedule.day_blocked","schedule",day,reason,u.email);return redirect("/admin#schedule");
+    }
+    if(method==="POST" && path==="/admin/schedule/unblock-date"){
+      const f=await req.formData(),day=validDay(String(f.get("day")||""));if(!day)throw invalid();await query("DELETE FROM blocked_dates WHERE day=$1",[day]);await audit("schedule.day_unblocked","schedule",day,"",u.email);return redirect("/admin#schedule");
+    }
+    if(method==="POST" && path==="/admin/schedule/slot"){
+      const f=await req.formData(),day=validDay(String(f.get("day")||"")),tm=String(f.get("time")||""),state=String(f.get("state")||"");
+      if(!day||!/^\d{2}:\d{2}$/.test(tm)||!["open","closed"].includes(state))throw invalid();
+      await query("INSERT INTO appointment_slot_overrides(day,slot_time,is_open,created_at) VALUES($1,$2,$3,datetime('now')) ON CONFLICT(day,slot_time) DO UPDATE SET is_open=EXCLUDED.is_open,created_at=datetime('now')",[day,tm,state==="open"]);
+      await audit(state==="open"?"schedule.slot_opened":"schedule.slot_closed","schedule",`${day} ${tm}`,"",u.email);return redirect("/admin#schedule");
+    }
+    if(method==="POST" && path==="/admin/schedule/slot/remove"){
+      const f=await req.formData(),id=Number(f.get("id"));if(!Number.isInteger(id)||id<1)throw invalid();await query("DELETE FROM appointment_slot_overrides WHERE id=$1",[id]);await audit("schedule.slot_override_removed","schedule",id,"",u.email);return redirect("/admin#schedule");
+    }
+
+    m=path.match(/^\/admin\/appointments\/(\d+)\/status$/);
+    if(method==="POST" && m){
+      const aid=Number(m[1]), f=await req.formData(), status=String(f.get("status")||""), allowed=new Set(["confirmed","rejected","rescheduled","completed","cancelled","no_show"]); if(!allowed.has(status)) return json({detail:"invalid_status"},422);
+      const a=await one("SELECT a.*,p.email patient_email,s.title_en service_title_en FROM appointments a JOIN patients p ON p.id=a.patient_id JOIN services s ON s.id=a.service_id WHERE a.id=$1",[aid]); if(!a) return render404(req,url);
+      let starts=a.starts_at, sk=a.slot_key;
+      const client=await db.pool.connect();
+      try{
+
+        if(status==="rescheduled"){
+          const nd=validDay(String(f.get("new_day")||"")),nt=String(f.get("new_time")||"");
+          if(!nd||!/^\d{2}:\d{2}$/.test(nt))throw invalid("new slot");
+          if(!(await availableSlots(nd,a.service_id,client,aid)).includes(nt))throw invalid("slot_unavailable",409);
+          starts=`${nd} ${nt}:00`;sk=slotKey(nd,nt);
+        } else if(["rejected","cancelled"].includes(status))sk=null;
+        else {
+          sk=slotKey(formatDate(starts,"%Y-%m-%d"),formatDate(starts).slice(11));
+          const overlap=await client.query("SELECT a.id FROM appointments a JOIN services s ON s.id=a.service_id WHERE a.id<>$1 AND a.slot_key IS NOT NULL AND a.starts_at < datetime($2, '+' || (SELECT duration FROM services WHERE id=$3) || ' minutes') AND datetime(a.starts_at, '+' || s.duration || ' minutes') > $2",[aid,starts,a.service_id]);
+          if(overlap.rows.length)throw invalid("slot_unavailable",409);
+        }
+        await client.query("UPDATE appointments SET status=$1,starts_at=$2,slot_key=$3 WHERE id=$4",[status,starts,sk,aid]);
+      }catch(e){if(e?.code==="23505")throw invalid("slot_unavailable",409);throw e;}finally{client.release();}
+      await audit("appointment.status_changed","appointment",aid,status,u.email); const [subj,body]=emailText(a.locale,status,{...a,starts_at:starts}); await sendEmail(a.patient_email,subj,body); return redirect("/admin#appointments");
+    }
+
+    if(method==="POST" && path==="/admin/services"){
+      const f=await req.formData(); const vals=["title_ar","title_tr","title_en","description_ar","description_tr","description_en"].map(k=>String(f.get(k)||"")); const duration=Number(f.get("duration")||30), price=validCost(f.get("price")), image=await validImage(f.get("image"));
+      if(vals.slice(0,3).some(v=>!v.trim())||!Number.isInteger(duration)||duration<10)throw invalid();
+      const max=await one("SELECT COALESCE(MAX(sort_order),0) AS n FROM services");
+      const r=await one("INSERT INTO services(slug,title_ar,title_tr,title_en,description_ar,description_tr,description_en,image,duration,sessions,price,sort_order,active) VALUES($1,$2,$3,$4,$5,$6,$7,$11,$8,1,$9,$10,TRUE) RETURNING id",[slugify(vals[2]),...vals,duration,price,max.n+1,image]); await audit("service.created","service",r.id,vals[0],u.email); return redirect("/admin#services");
+    }
+    m=path.match(/^\/admin\/services\/(\d+)\/edit$/);
+    if(method==="POST" && m){
+      const sid=Number(m[1]),old=await one("SELECT * FROM services WHERE id=$1",[sid]);if(!old)throw invalid("not_found",404);
+      const f=await req.formData(),vals=["title_ar","title_tr","title_en","description_ar","description_tr","description_en"].map(k=>String(f.get(k)||"")),duration=Number(f.get("duration")||30);
+      if(vals.slice(0,3).some(v=>!v.trim())||!Number.isInteger(duration)||duration<10)throw invalid();
+      await query("UPDATE services SET title_ar=$1,title_tr=$2,title_en=$3,description_ar=$4,description_tr=$5,description_en=$6,duration=$7,price=$8,image=$9 WHERE id=$10",[...vals,duration,validCost(f.get("price")),await validImage(f.get("image"),old.image),sid]);
+      await audit("service.updated","service",sid,vals[0],u.email);return redirect("/admin#services");
+    }
+    m=path.match(/^\/admin\/services\/(\d+)\/toggle$/);
+    if(method==="POST" && m){ const sid=Number(m[1]); const r=await one("UPDATE services SET active=NOT active WHERE id=$1 RETURNING active",[sid]); if(!r)return render404(req,url); await audit("service.toggled","service",sid,String(r.active),u.email); return redirect("/admin#services"); }
+
+    if(method==="POST" && path==="/admin/settings"){
+      const f=await req.formData(); const keys=["hero_title_ar","hero_title_tr","hero_title_en","hero_subtitle_ar","hero_subtitle_tr","hero_subtitle_en","hero_image","phone","whatsapp","email","address_ar","address_tr","address_en","about_ar","about_tr","about_en","video_title_ar","video_title_tr","video_title_en","video_subtitle_ar","video_subtitle_tr","video_subtitle_en","video_url","video_poster"];
+      const vals={}; for(const k of keys) vals[k]=String(f.get(k)||""); vals.video_enabled=f.get("video_enabled")?"1":"0";
+      await runtime().dr_wael_clinic_db.batch(Object.entries(vals).map(([k,v])=>runtime().dr_wael_clinic_db.prepare('INSERT INTO site_settings("key",value) VALUES(?,?) ON CONFLICT("key") DO UPDATE SET value=excluded.value').bind(k,v)));
+      await audit("site.settings_updated","site","settings",JSON.stringify(vals),u.email); return redirect("/admin#cms");
+    }
+
+    if(method==="POST" && path==="/admin/media"){
+      const f=await req.formData(), category=String(f.get("category")||"General").slice(0,80), file=f.get("file");
+      const data=await uploadData(file),ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","application/pdf":"pdf","video/mp4":"mp4"}[file.type],key=`${randomUUID()}.${ext}`,store=mediaStore();
+      await store.set(key,data,{metadata:{mime:file.type,filename:file.name||key}});
+      const p=`/media/${key}`;let row;
+      try{row=await one("INSERT INTO media(filename,path,mime,category,created_at) VALUES($1,$2,$3,$4,datetime('now')) RETURNING id",[(file.name||key).slice(0,255),p,file.type,category]);}catch(e){await store.delete(key);throw e;}
+      await audit("media.uploaded","media",row.id,file.name||key,u.email);
+      return req.headers.get("accept")?.includes("application/json")?json({path:p}):redirect("/admin#media");
+    }
+
+    m=path.match(/^\/admin\/patients\/(\d+)\/note$/);
+    if(method==="POST" && m){const pid=Number(m[1]), f=await req.formData(), note=String(f.get("note")||"").trim(); if(!(await one("SELECT id FROM patients WHERE id=$1",[pid])))return render404(req,url); if(!note)throw invalid(); await db.pool.query("INSERT INTO clinical_notes(patient_id,note,created_at) VALUES($1,$2,datetime('now'))",[pid,note]); await audit("patient.note_added","patient",pid,"clinical note",u.email); return redirect(`/admin/patients/${pid}`);}
+    m=path.match(/^\/admin\/patients\/(\d+)\/plan(?:\/(\d+)\/(edit|delete))?$/);
+    if(method==="POST" && m){
+      const pid=Number(m[1]),id=Number(m[2]||0),old=id?await owned("treatment_plans",id,pid):null;
+      if(!await one("SELECT id FROM patients WHERE id=$1",[pid]))throw invalid("not_found",404);
+      if(m[3]==="delete")await query("DELETE FROM treatment_plans WHERE id=$1 AND patient_id=$2",[id,pid]);
+      else {
+        const f=await req.formData(),title=String(f.get("title")||"").trim(),status=String(f.get("status")||"planned"),tooth=String(f.get("tooth")||"");
+        if(!title||tooth.length>30||!["planned","in_progress","completed"].includes(status))throw invalid();
+        const vals=[title,status,String(f.get("notes")||""),tooth,validDay(String(f.get("treatment_date")||"")),validCost(f.get("cost"))];
+        if(old)await query("UPDATE treatment_plans SET title=$1,status=$2,notes=$3,tooth=$4,treatment_date=$5,cost=$6 WHERE id=$7 AND patient_id=$8",[...vals,id,pid]);
+        else await query("INSERT INTO treatment_plans(title,status,notes,tooth,treatment_date,cost,patient_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,datetime('now'))",[...vals,pid]);
+      }
+      await audit(m[3]==="delete"?"patient.plan_deleted":id?"patient.plan_updated":"patient.plan_added","patient",pid,"treatment plan",u.email);
+      return redirect(`/admin/patients/${pid}#plans`);
+    }
+    m=path.match(/^\/admin\/patients\/(\d+)\/files(?:\/(\d+)(\/delete)?)?$/);
+    if(m && ["GET","POST"].includes(method)){
+      const pid=Number(m[1]),fid=Number(m[2]||0),store=patientStore();
+      if(!await one("SELECT id FROM patients WHERE id=$1",[pid]))throw invalid("not_found",404);
+      if(fid){
+        const f=await owned("patient_files",fid,pid);
+        if(method==="POST" && m[3]){
+          await store.delete(f.stored_name);await query("DELETE FROM patient_files WHERE id=$1 AND patient_id=$2",[fid,pid]);
+          await audit("patient.file_deleted","patient",pid,String(fid),u.email);return redirect(`/admin/patients/${pid}#files`);
+        }
+        if(method!=="GET"||m[3])throw invalid("not_found",404);
+        const data=await store.get(f.stored_name,{type:"arrayBuffer"});if(data===null)throw invalid("not_found",404);
+        return withSecurity(new Response(data,{headers:{"content-type":f.mime,"cache-control":"no-store","content-disposition":`attachment; filename="patient-file"; filename*=UTF-8''${encodeURIComponent(f.filename).replaceAll("'","%27")}`}}));
+      }
+      if(method!=="POST")throw invalid("not_found",404);
+      const form=await req.formData(),file=form.get("file"),data=await uploadData(file,true),key=randomUUID(),filename=(file.name||"file").replaceAll("\\","/").split("/").pop().slice(0,255);
+      await store.set(key,data,{metadata:{mime:file.type}});
+      try{await query("INSERT INTO patient_files(patient_id,filename,stored_name,mime,created_at) VALUES($1,$2,$3,$4,datetime('now'))",[pid,filename,key,file.type]);}catch(e){await store.delete(key);throw e;}
+      await audit("patient.file_added","patient",pid,"private file",u.email);return redirect(`/admin/patients/${pid}#files`);
+    }
+    m=path.match(/^\/admin\/patients\/(\d+)$/);
+    if(method==="GET" && m){
+      const pid=Number(m[1]),p=await one("SELECT * FROM patients WHERE id=$1",[pid]);if(!p)throw invalid("not_found",404);
+      const [appts0,notes0,plans0,files0]=await Promise.all([
+        query("SELECT a.*,s.title_ar service_title_ar,s.title_en service_title_en,s.slug service_slug,p.name patient_name,p.phone patient_phone,p.email patient_email FROM appointments a JOIN services s ON s.id=a.service_id JOIN patients p ON p.id=a.patient_id WHERE a.patient_id=$1 ORDER BY a.starts_at DESC",[pid]),
+        query("SELECT * FROM clinical_notes WHERE patient_id=$1 ORDER BY id DESC",[pid]),query("SELECT * FROM treatment_plans WHERE patient_id=$1 ORDER BY id DESC",[pid]),query("SELECT * FROM patient_files WHERE patient_id=$1 ORDER BY id DESC",[pid])
+      ]);
+      const events=[[p.created_at,"إنشاء ملف المريض"],...notes0.map(n=>[n.created_at,"ملاحظة سريرية: "+n.note]),...appts0.map(a=>[a.starts_at,"موعد: "+a.service_title_ar+" · "+a.status]),...files0.map(f=>[f.created_at,"إرفاق ملف: "+f.filename]),...plans0.filter(x=>x.created_at).map(x=>[x.created_at,"إضافة علاج: "+x.title])];
+      events.sort((a,b)=>new Date(b[0])-new Date(a[0]));
+      const plans=plans0.map(x=>({...x,treatment_date:x.treatment_date?formatDate(x.treatment_date,"%Y-%m-%d"):null}));
+      return html(render("patient.html",{p:{...p,birth_date:p.birth_date?formatDate(p.birth_date,"%Y-%m-%d"):null,created_at:dateProxy(p.created_at)},appts:appts0.map(apptView),notes:notes0.map(noteView),plans,files:files0.map(noteView),events:events.map(([at,label])=>[dateProxy(at),label])}));
+    }
+
+    if(method==="POST" && path==="/admin/cases"){
+      const f=await req.formData(), status=String(f.get("status")||"draft"); if(!["draft","private","published"].includes(status)) return json({detail:"invalid status"},422); const row=await one("INSERT INTO clinical_cases(title,treatment_type,description,before_image,after_image,status,case_date) VALUES($1,$2,$3,$4,$5,$6,CURRENT_DATE) RETURNING id",[String(f.get("title")||""),String(f.get("treatment_type")||""),String(f.get("description")||""),await validImage(f.get("before_image")),await validImage(f.get("after_image")),status]); await audit("case.created","clinical_case",row.id,String(f.get("title")||""),u.email); return redirect("/admin#cases");
+    }
+    m=path.match(/^\/admin\/cases\/(\d+)\/(edit|delete)$/);
+    if(method==="POST" && m){
+      const cid=Number(m[1]),old=await one("SELECT * FROM clinical_cases WHERE id=$1",[cid]);if(!old)throw invalid("not_found",404);
+      if(m[2]==="delete")await query("DELETE FROM clinical_cases WHERE id=$1",[cid]);
+      else {
+        const f=await req.formData(),title=String(f.get("title")||"").trim(),status=String(f.get("status")||"");if(!title||!["draft","private","published"].includes(status))throw invalid();
+        await query("UPDATE clinical_cases SET title=$1,treatment_type=$2,description=$3,before_image=$4,after_image=$5,status=$6 WHERE id=$7",[title,String(f.get("treatment_type")||""),String(f.get("description")||""),await validImage(f.get("before_image"),old.before_image),await validImage(f.get("after_image"),old.after_image),status,cid]);
+      }
+      await audit(m[2]==="delete"?"case.deleted":"case.updated","clinical_case",cid,old.title,u.email);return redirect("/admin#cases");
+    }
+    if(method==="POST" && path==="/admin/reviews"){
+      const f=await req.formData(), name=String(f.get("name")||"").trim(), rating=Math.max(1,Math.min(5,Number(f.get("rating")||5))), published=!!f.get("published"); const row=await one("INSERT INTO reviews(name,body_ar,body_tr,body_en,rating,published,created_at) VALUES($1,$2,$3,$4,$5,$6,datetime('now')) RETURNING id",[name,String(f.get("body_ar")||"").trim(),String(f.get("body_tr")||"").trim(),String(f.get("body_en")||"").trim(),rating,published]); await audit("review.created","review",row.id,name,u.email); return redirect("/admin#reviews");
+    }
+    if(method==="POST" && path==="/admin/faqs"){
+      const f=await req.formData(), max=await one("SELECT COALESCE(MAX(sort_order),0) AS n FROM faq"), qa=String(f.get("question_ar")||"").trim(); const row=await one("INSERT INTO faq(question_ar,question_tr,question_en,answer_ar,answer_tr,answer_en,sort_order,published) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",[qa,String(f.get("question_tr")||"").trim(),String(f.get("question_en")||"").trim(),String(f.get("answer_ar")||"").trim(),String(f.get("answer_tr")||"").trim(),String(f.get("answer_en")||"").trim(),max.n+1,!!f.get("published")]); await audit("faq.created","faq",row.id,qa,u.email); return redirect("/admin#faq");
+    }
+    if(method==="POST" && path==="/admin/articles"){
+      const f=await req.formData(), ta=String(f.get("title_ar")||"").trim(), te=String(f.get("title_en")||"").trim()||ta; const row=await one("INSERT INTO articles(slug,title_ar,title_tr,title_en,body_ar,body_tr,body_en,published) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",[slugify(te),ta,String(f.get("title_tr")||"").trim(),te,String(f.get("body_ar")||"").trim(),String(f.get("body_tr")||"").trim(),String(f.get("body_en")||"").trim(),!!f.get("published")]); await audit("article.created","article",row.id,ta,u.email); return redirect("/admin#articles");
+    }
+  }
+
+  m=path.match(/^\/media\/(.+)$/);
+  if(method==="GET" && m){
+    const key=decodeURIComponent(m[1]), row=await one("SELECT * FROM media WHERE path=$1",[`/media/${key}`]); if(!row)return new Response("Not found",{status:404}); const store=mediaStore(), data=await store.get(key,{type:"arrayBuffer"}); if(data===null)return new Response("Not found",{status:404}); return withSecurity(new Response(data,{headers:{"content-type":row.mime||"application/octet-stream","cache-control":"public, max-age=31536000, immutable"}}));
+  }
+
+  if(method==="GET" && path==="/sitemap.xml"){
+    const urls=["/","/booking","/?lang=ar","/?lang=tr","/?lang=en"]; const xml=`<?xml version='1.0' encoding='UTF-8'?><urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>${urls.map(u=>`<url><loc>${(runtime().BASE_URL || 'http://localhost:8787')}${u}</loc></url>`).join("")}</urlset>`; return withSecurity(new Response(xml,{headers:{"content-type":"application/xml; charset=utf-8"}}));
+  }
+  if(method==="GET" && path==="/robots.txt") return withSecurity(new Response(`User-agent: *\nAllow: /\nDisallow: /admin\nSitemap: ${(runtime().BASE_URL || 'http://localhost:8787')}/sitemap.xml`,{headers:{"content-type":"text/plain; charset=utf-8"}}));
+  return render404(req,url);
+}
+
+function render404(req,url){ const l=lang(req,url); return html(render("error.html",{code:404,message:"الصفحة غير موجودة",l,t:I18N[l]}),404); }
+
+async function dispatch(req) {
+  try {
+    const response=await handle(req);
+    if(new URL(req.url).pathname.startsWith("/admin"))response.headers.set("Cache-Control","no-store");
+    return response;
+  }
+  catch (e) {
+    if(e.status)return json({detail:e.status===503?"Server configuration incomplete":e.message},e.status);
+    console.error("Worker request failed",e.code||e.name);
+    try { return html(render("error.html",{code:500,message:"حدث خطأ غير متوقع",l:"ar",t:I18N.ar}),500); }
+    catch { return new Response("Internal Server Error",{status:500}); }
+  }
+};
+
+export default {fetch(req,bindings){return context.run(bindings,()=>{const path=new URL(req.url).pathname;if(path.startsWith('/static/'))return bindings.ASSETS.fetch(req);return dispatch(req);});}};

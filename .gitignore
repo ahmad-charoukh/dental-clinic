@@ -15,3 +15,13 @@ data/wael.db
 app/static/uploads/media/
 public/static/uploads/media/
 data/patient_files/
+
+.wrangler/
+.dev.vars
+work/
+.pytest_cache/
+*export*.json
+*export*.sql
+cloudflare/templates.mjs
+
+cloudflare/d1-data-import.sql
