@@ -1,5 +1,5 @@
 ﻿{
-  "name": "dr-wael-clinic",
+  "name": "dental-clinic",
   "main": "./cloudflare-app.mjs",
   "compatibility_date": "2026-10-04",
 
@@ -17,3 +17,4 @@
     }
   ]
 }
+
