@@ -1,5 +1,19 @@
-{
+﻿{
   "name": "dr-wael-clinic",
-  "compatibility_date": "2026-09-26",
-  "main": ".\\cloudflare-proxy.mjs"
+  "main": "./cloudflare-app.mjs",
+  "compatibility_date": "2026-10-04",
+
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+
+  "d1_databases": [
+    {
+      "binding": "dr_wael_clinic_db",
+      "database_name": "dr-wael-clinic-db",
+      "database_id": "240b29ed-9b20-4546-912d-ee940410d206"
+    }
+  ]
 }
